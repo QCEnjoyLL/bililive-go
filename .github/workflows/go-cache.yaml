@@ -3,17 +3,9 @@
 # 其他 workflow 通过 workflow_call 调用此 workflow 作为前置 job
 name: Go Cache
 on:
-  # 允许其他 workflow 调用（reusable workflow）
+  # 仅允许其他 workflow 调用（reusable workflow，被 release.yaml 复用）
+  # 已移除 push/手动触发，避免在普通推送时自动运行
   workflow_call:
-  # go.mod/go.sum 变更时自动预热
-  push:
-    branches:
-      - '*'
-    paths:
-      - 'go.mod'
-      - 'go.sum'
-  # 支持手动触发（强制刷新缓存）
-  workflow_dispatch:
 
 permissions:
   contents: read

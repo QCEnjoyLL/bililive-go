@@ -98,6 +98,8 @@ jobs:
   publish-release:
     runs-on: ubuntu-latest
     needs: [release-bins-sharded]
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -230,7 +232,7 @@ jobs:
           platforms: ${{ matrix.platform }}
           push: ${{ env.IS_DRY_RUN != 'true' }}
           tags: ""
-          outputs: ${{ env.IS_DRY_RUN != 'true' && 'type=image,name=chigusa/bililive-go,push-by-digest=true,name-canonical=true' || '' }}
+          outputs: ${{ env.IS_DRY_RUN != 'true' && format('type=image,name={0}/bililive-go,push-by-digest=true,name-canonical=true', secrets.DOCKER_USERNAME) || '' }}
           cache-from: type=gha,scope=docker-${{ matrix.arch }}
           cache-to: type=gha,mode=max,scope=docker-${{ matrix.arch }}
 
@@ -266,9 +268,9 @@ jobs:
       - run: echo "GIT_TAG=`echo $(git describe --tags --abbrev=0)`" >> $GITHUB_ENV
       - run: |
           if ! echo $GIT_TAG | grep "rc" >/dev/null; then
-            DOCKER_TAGS="chigusa/bililive-go:$GIT_TAG,chigusa/bililive-go:latest"
+            DOCKER_TAGS="${{ secrets.DOCKER_USERNAME }}/bililive-go:$GIT_TAG,${{ secrets.DOCKER_USERNAME }}/bililive-go:latest"
           else
-            DOCKER_TAGS="chigusa/bililive-go:$GIT_TAG"
+            DOCKER_TAGS="${{ secrets.DOCKER_USERNAME }}/bililive-go:$GIT_TAG"
           fi
           echo "DOCKER_TAGS=$DOCKER_TAGS" >> $GITHUB_ENV
 
@@ -297,7 +299,7 @@ jobs:
           DIGEST_ARGS=""
           for dgst in *; do
             if echo "$dgst" | grep -qE '^[0-9a-f]{64}$'; then
-              DIGEST_ARGS="$DIGEST_ARGS chigusa/bililive-go@sha256:$dgst"
+              DIGEST_ARGS="$DIGEST_ARGS ${{ secrets.DOCKER_USERNAME }}/bililive-go@sha256:$dgst"
             else
               echo "警告: 跳过非 digest 文件: $dgst"
             fi
@@ -311,5 +313,5 @@ jobs:
           done
 
       - name: Inspect final image
-        run: docker buildx imagetools inspect "chigusa/bililive-go:$GIT_TAG"
+        run: docker buildx imagetools inspect "${{ secrets.DOCKER_USERNAME }}/bililive-go:$GIT_TAG"
 
