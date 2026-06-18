@@ -404,14 +404,32 @@ func (p *Parser) newPeerConnection(cd connectedData, tracksReady, videoPT, audio
 			return
 		}
 		defer conn.Close()
+		// 增大本地 UDP 发送缓冲
+		if uc, ok := conn.(*net.UDPConn); ok {
+			_ = uc.SetWriteBuffer(8 << 20)
+		}
+		// 解耦：track 读取与 UDP 写入分离，避免写入抖动反压导致 pion 侧丢包。
+		// 单写协程保证 FIFO 顺序，通道足够大，localhost 写入极快，几乎不会丢。
+		pktCh := make(chan []byte, 4096)
+		go func() {
+			for b := range pktCh {
+				_, _ = conn.Write(b)
+			}
+		}()
 		buf := make([]byte, 1600)
 		for {
 			n, _, rerr := track.Read(buf)
 			if rerr != nil {
+				close(pktCh)
 				return
 			}
 			p.markMedia()
-			_, _ = conn.Write(buf[:n])
+			pkt := make([]byte, n)
+			copy(pkt, buf[:n])
+			select {
+			case pktCh <- pkt:
+			default: // 通道满（极罕见）时丢弃，优先保证 track 读取不被阻塞
+			}
 		}
 	})
 
@@ -438,6 +456,11 @@ func (p *Parser) startFFmpeg(ctx context.Context, ffmpegPath, sdp, file string) 
 		// SPS（分辨率），否则会报 "dimensions not set / Could not write header"。
 		"-analyzeduration", "10000000",
 		"-probesize", "10000000",
+		// 抗丢包/乱序：增大 UDP 接收缓冲（关键帧大量分片时不溢出）、增大 RTP 重排
+		// 队列与最大等待时延，给乱序/NACK 重传到达的包留出被使用的时间窗，显著减少花屏。
+		"-buffer_size", "33554432",
+		"-reorder_queue_size", "4096",
+		"-max_delay", "5000000",
 		"-fflags", "+genpts",
 		"-i", sdpFile.Name(),
 	}
