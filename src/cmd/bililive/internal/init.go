@@ -4,6 +4,7 @@ import (
 	// import all lives
 	_ "github.com/bililive-go/bililive-go/src/live/acfun"
 	_ "github.com/bililive-go/bililive-go/src/live/bilibili"
+	_ "github.com/bililive-go/bililive-go/src/live/boyfriend"
 	_ "github.com/bililive-go/bililive-go/src/live/cc"
 	_ "github.com/bililive-go/bililive-go/src/live/douyin"
 	_ "github.com/bililive-go/bililive-go/src/live/douyu"

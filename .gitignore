@@ -176,6 +176,13 @@ external_tools/
 coverage.txt
 .local
 
+# 录制输出与本地测试配置（不纳入版本库）
+/Videos/*
+!/Videos/.gitkeep
+/config-boyfriend.yml
+*.mkv
+
+
 # 本地自动升级测试配置（不提交到仓库，使用 .example.json 作为模板）
 test/launcher-config-local.json
 

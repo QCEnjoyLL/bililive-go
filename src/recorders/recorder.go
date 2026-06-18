@@ -35,6 +35,7 @@ import (
 	"github.com/bililive-go/bililive-go/src/pkg/parser/bililive_recorder"
 	"github.com/bililive-go/bililive-go/src/pkg/parser/ffmpeg"
 	"github.com/bililive-go/bililive-go/src/pkg/parser/native/flv"
+	"github.com/bililive-go/bililive-go/src/pkg/parser/webrtcrec"
 	bilisentry "github.com/bililive-go/bililive-go/src/pkg/sentry"
 	"github.com/bililive-go/bililive-go/src/pkg/streamprobe"
 	"github.com/bililive-go/bililive-go/src/pkg/utils"
@@ -55,6 +56,11 @@ var (
 	// newParser 根据配置的下载器类型创建 parser，并实现回退逻辑：
 	// bililive-recorder -> ffmpeg -> native
 	newParser = func(u *url.URL, downloaderType configs.DownloaderType, cfg map[string]string, logger *livelogger.LiveLogger) (parser.Parser, error) {
+		// WebRTC 流（如 boyfriend.show）使用专用 parser，不走 ffmpeg/native 下载器
+		if u.Scheme == "webrtc" {
+			return parser.New(webrtcrec.Name, cfg, logger)
+		}
+
 		// 判断是否为 FLV 流
 		isFLV := strings.Contains(u.Path, ".flv")
 
@@ -400,11 +406,14 @@ func (r *recorder) tryRecord(ctx context.Context) {
 	r.currentStreamHeaders = streamInfo.HeadersForDownloader
 	r.currentFileLock.Unlock()
 
-	if strings.Contains(url.Path, "m3u8") {
+	if streamInfo.Format == "webrtc" {
+		// WebRTC 录制为 Matroska（H264 + Opus）
+		fileName = strings.TrimSuffix(fileName, filepath.Ext(fileName)) + ".mkv"
+	} else if strings.Contains(url.Path, "m3u8") {
 		fileName = fileName[:len(fileName)-4] + ".ts"
 	}
 
-	if info.AudioOnly {
+	if info.AudioOnly && streamInfo.Format != "webrtc" {
 		fileName = fileName[:strings.LastIndex(fileName, ".")] + ".aac"
 	}
 

@@ -1099,6 +1099,7 @@ func getPlatformStats(writer http.ResponseWriter, r *http.Request) {
 		"bilibili", "douyin", "douyu", "huya", "kuaishou", "yy", "acfun",
 		"lang", "missevan", "openrec", "weibolive", "xiaohongshu", "yizhibo",
 		"hongdoufm", "zhanqi", "cc", "twitch", "qq", "huajiao", "sooplive",
+		"boyfriend",
 	}
 
 	// 构建平台统计响应
