@@ -2,10 +2,12 @@
 [![CI](https://github.com/bililive-go/bililive-go/actions/workflows/tests.yaml/badge.svg?branch=master)](https://github.com/bililive-go/bililive-go/actions/workflows/tests.yaml)
 [![Go Report Card](https://goreportcard.com/badge/github.com/bililive-go/bililive-go)](https://goreportcard.com/report/github.com/bililive-go/bililive-go)
 [![Github release](https://img.shields.io/github/release/bililive-go/bililive-go.svg)](https://github.com/bililive-go/bililive-go/releases/latest)
-[![Docker Pulls](https://img.shields.io/docker/pulls/chigusa/bililive-go.svg)](https://hub.docker.com/r/chigusa/bililive-go/)
+[![Docker Pulls](https://img.shields.io/docker/pulls/orangeqiu/bililive-go.svg)](https://hub.docker.com/r/orangeqiu/bililive-go/)
 [![Bilibili](https://img.shields.io/badge/%E5%93%94%E5%93%A9%E5%93%94%E5%93%A9-%E6%9C%AA%E6%9D%A5%E7%A7%91%E6%8A%80%E7%8E%8B%E8%80%81%E8%8F%8A%E5%BD%95%E6%92%AD%E7%BB%84-ebb8d0.svg)](https://space.bilibili.com/18578203/)
 
 Bililive-go是一个支持多种直播平台的直播录制工具   
+
+> 本仓库在上游 [bililive-go](https://github.com/bililive-go/bililive-go) 基础上，新增了 **BoyFriend（zh.boyfriend.show）** 平台的直播录制支持：该站视频经 WebRTC 分发，本项目通过 WebRTC 拉流录制为 MKV（H264 + Opus），并支持开播检测、清晰度选择与 Cookie。
 
 ### 第三方生态
 
@@ -126,6 +128,12 @@ Bililive-go是一个支持多种直播平台的直播录制工具
         <td>✅ 支持</td>
         <td>✅ 支持</td>
     </tr>
+    <tr align="center">
+        <td>BoyFriend</td>
+        <td>zh.boyfriend.show</td>
+        <td>✅ 支持（WebRTC）</td>
+        <td>✅ 支持</td>
+    </tr>
 </table>
 
 ### cookie 在 config.yml 中的设置方法
@@ -187,11 +195,11 @@ https://github.com/bililive-go/bililive-go/wiki/Install-Linux
 
 ### docker
 
-使用 https://hub.docker.com/r/chigusa/bililive-go 镜像创建容器运行。
+使用 https://hub.docker.com/r/orangeqiu/bililive-go 镜像创建容器运行。
 
 例如：
 ```
-docker run --restart=always -v ~/config.yml:/etc/bililive-go/config.yml -v ~/Videos:/srv/bililive -p 8080:8080 -d chigusa/bililive-go
+docker run --restart=always -v ~/config.yml:/etc/bililive-go/config.yml -v ~/Videos:/srv/bililive -p 8080:8080 -d orangeqiu/bililive-go
 ```
 
 ### docker compose
@@ -245,7 +253,7 @@ scoop install make
 
 ```bash
 # 1. 克隆代码
-git clone https://github.com/bililive-go/bililive-go.git
+git clone https://github.com/QCEnjoyLL/bililive-go.git
 cd bililive-go
 
 # 2. 安装开发工具（delve 调试器、gopls 语言服务器等）

@@ -1,0 +1,13 @@
+name: 'Close stale issues'
+on:
+  # 仅手动触发（原自动触发已移除，保留以便需要时手动运行）
+  workflow_dispatch:
+jobs:
+  stale:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/stale@v9
+        with:
+          stale-issue-message: 'This issue has been automatically closed due to inactivity. Please feel free to reopen it if you are still facing this issue.'
+          stale-issue-label: 'no-issue-activity'
+          only-labels: 'awaiting-feedback'
