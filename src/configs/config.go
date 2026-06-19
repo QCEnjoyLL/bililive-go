@@ -60,6 +60,19 @@ type Feature struct {
 	// 当检测到视频编码参数变化（新的 SPS/PPS）时，会主动断开连接触发 FFmpeg 分段
 	// 这可以避免因编码参数变化导致的花屏问题
 	EnableFlvProxySegment bool `yaml:"enable_flv_proxy_segment,omitempty" json:"enable_flv_proxy_segment,omitempty"`
+
+	// RecordingEngine 仅对 WebRTC 流（如 boyfriend.show）生效，选择录制引擎：
+	//   ""/"webrtc" (默认): 进程内直转，快速稳定，丢包时可能有少量花屏
+	//   "browser": 无头浏览器解码后再录，画面干净无绿幕/花屏，但更吃 CPU、需要 Chrome/Edge
+	RecordingEngine string `yaml:"recording_engine,omitempty" json:"recording_engine,omitempty"`
+}
+
+// GetEffectiveRecordingEngine 返回实际生效的 WebRTC 录制引擎（默认 "webrtc"）
+func (f *Feature) GetEffectiveRecordingEngine() string {
+	if f.RecordingEngine == "browser" {
+		return "browser"
+	}
+	return "webrtc"
 }
 
 // GetEffectiveDownloaderType 获取实际生效的下载器类型

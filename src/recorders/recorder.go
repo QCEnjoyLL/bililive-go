@@ -35,6 +35,7 @@ import (
 	"github.com/bililive-go/bililive-go/src/pkg/parser/bililive_recorder"
 	"github.com/bililive-go/bililive-go/src/pkg/parser/ffmpeg"
 	"github.com/bililive-go/bililive-go/src/pkg/parser/native/flv"
+	"github.com/bililive-go/bililive-go/src/pkg/parser/browserrec"
 	"github.com/bililive-go/bililive-go/src/pkg/parser/webrtcrec"
 	bilisentry "github.com/bililive-go/bililive-go/src/pkg/sentry"
 	"github.com/bililive-go/bililive-go/src/pkg/streamprobe"
@@ -58,6 +59,10 @@ var (
 	newParser = func(u *url.URL, downloaderType configs.DownloaderType, cfg map[string]string, logger *livelogger.LiveLogger) (parser.Parser, error) {
 		// WebRTC 流（如 boyfriend.show）使用专用 parser，不走 ffmpeg/native 下载器
 		if u.Scheme == "webrtc" {
+			// 可切换：默认进程内 webrtcrec；recording_engine=browser 时用无头浏览器引擎
+			if cfg["recording_engine"] == "browser" {
+				return parser.New(browserrec.Name, cfg, logger)
+			}
 			return parser.New(webrtcrec.Name, cfg, logger)
 		}
 
@@ -422,8 +427,9 @@ func (r *recorder) tryRecord(ctx context.Context) {
 		return
 	}
 	parserCfg := map[string]string{
-		"timeout_in_us": strconv.Itoa(resolvedConfig.TimeoutInUs),
-		"audio_only":    strconv.FormatBool(info.AudioOnly),
+		"timeout_in_us":    strconv.Itoa(resolvedConfig.TimeoutInUs),
+		"audio_only":       strconv.FormatBool(info.AudioOnly),
+		"recording_engine": resolvedConfig.Feature.GetEffectiveRecordingEngine(),
 	}
 	// 使用层级配置的下载器类型
 	downloaderType := resolvedConfig.Feature.GetEffectiveDownloaderType()
