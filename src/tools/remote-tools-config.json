@@ -1,4 +1,30 @@
 {
+  "chromium": {
+    "150.0.7871.24": {
+      "downloadUrl": {
+        "windows": {
+          "amd64": [
+            "https://storage.googleapis.com/chrome-for-testing-public/150.0.7871.24/win64/chrome-win64.zip",
+            "https://bililive-go.com/remotetools/download?downloadurl=https://storage.googleapis.com/chrome-for-testing-public/150.0.7871.24/win64/chrome-win64.zip"
+          ]
+        },
+        "linux": {
+          "amd64": [
+            "https://storage.googleapis.com/chrome-for-testing-public/150.0.7871.24/linux64/chrome-linux64.zip",
+            "https://bililive-go.com/remotetools/download?downloadurl=https://storage.googleapis.com/chrome-for-testing-public/150.0.7871.24/linux64/chrome-linux64.zip"
+          ]
+        }
+      },
+      "pathToEntry": {
+        "windows": "chrome-win64/chrome.exe",
+        "linux": "chrome-linux64/chrome"
+      },
+      "printInfoCmd": [
+        "--version"
+      ],
+      "isExecutable": true
+    }
+  },
   "bililive-recorder": {
     "v2.17.3": {
       "downloadUrl": [

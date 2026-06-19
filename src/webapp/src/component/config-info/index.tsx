@@ -65,6 +65,8 @@ interface EffectiveConfig {
     downloader_type?: DownloaderType;
     use_native_flv_parser?: boolean; // 已废弃，保留用于向后兼容
     remove_symbol_other_character: boolean;
+    recording_engine?: string;
+    recording_quality?: string;
   };
   out_put_tmpl: string;
   default_out_put_tmpl: string;
@@ -1841,6 +1843,60 @@ export const RoomConfigForm: React.FC<{
                 录播姬 {!globalConfig?.downloader_availability?.bililive_recorder_available && '(未安装)'}
               </Tooltip>
             </Select.Option>
+          </Select>
+        </Form.Item>
+      </ConfigField>
+
+      <ConfigField
+        label="录制引擎"
+        description="仅对 WebRTC 直播生效（如 boyfriend.show）。进程内：快速稳定但可能有花屏；无头浏览器：画面干净但更耗 CPU。"
+        inheritance={{
+          source: (platformConfig as any)?.feature?.recording_engine ? 'platform' : 'global',
+          linkTo: (platformConfig as any)?.feature?.recording_engine ? `/configInfo?tab=platforms&platform=${platformKey}` : '/configInfo?tab=global',
+          isOverridden: room.feature?.recording_engine != null && room.feature?.recording_engine !== '',
+          inheritedValue: (() => {
+            const v = (platformConfig as any)?.feature?.recording_engine || globalConfig?.feature?.recording_engine;
+            return v === 'browser' ? '无头浏览器' : '进程内直转 (默认)';
+          })()
+        }}
+        id={`rooms-live-${room.live_id}-recording_engine`}
+      >
+        <Form.Item name={['feature', 'recording_engine']} noStyle>
+          {/* @ts-ignore */}
+          <Select
+            style={{ width: 280 }}
+            placeholder={`继承${(platformConfig as any)?.feature?.recording_engine ? '平台' : '全局'}设置`}
+            allowClear
+          >
+            <Select.Option value="webrtc">进程内直转 (默认，快/稳)</Select.Option>
+            <Select.Option value="browser">无头浏览器 (无花屏，更吃 CPU)</Select.Option>
+          </Select>
+        </Form.Item>
+      </ConfigField>
+
+      <ConfigField
+        label="录制画质 (浏览器引擎)"
+        description="仅当录制引擎为“无头浏览器”时生效；默认为源画质（最高）。"
+        inheritance={{
+          source: (platformConfig as any)?.feature?.recording_quality ? 'platform' : 'global',
+          linkTo: (platformConfig as any)?.feature?.recording_quality ? `/configInfo?tab=platforms&platform=${platformKey}` : '/configInfo?tab=global',
+          isOverridden: room.feature?.recording_quality != null && room.feature?.recording_quality !== '',
+          inheritedValue: (platformConfig as any)?.feature?.recording_quality || globalConfig?.feature?.recording_quality || '源画质 (最高)'
+        }}
+        id={`rooms-live-${room.live_id}-recording_quality`}
+      >
+        <Form.Item name={['feature', 'recording_quality']} noStyle>
+          {/* @ts-ignore */}
+          <Select
+            style={{ width: 280 }}
+            placeholder={`继承${(platformConfig as any)?.feature?.recording_quality ? '平台' : '全局'}设置`}
+            allowClear
+          >
+            <Select.Option value="source">源画质 (最高)</Select.Option>
+            <Select.Option value="1080p">1080p</Select.Option>
+            <Select.Option value="720p">720p</Select.Option>
+            <Select.Option value="480p">480p</Select.Option>
+            <Select.Option value="360p">360p</Select.Option>
           </Select>
         </Form.Item>
       </ConfigField>
