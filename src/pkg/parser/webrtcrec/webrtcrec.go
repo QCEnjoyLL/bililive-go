@@ -85,9 +85,6 @@ type Parser struct {
 
 	lastMediaUnixNano int64
 
-	videoLive       int32 // 0=未开闸（等首个干净 IDR），1=已开闸转发
-	lastPLIUnixNano int64 // PLI 发送限频用
-
 	statusReq  chan struct{}
 	statusResp chan map[string]interface{}
 }
@@ -369,15 +366,14 @@ func (p *Parser) newPeerConnection(cd connectedData, tracksReady, videoPT, audio
 		codec := track.Codec()
 		p.logger.Infof("WebRTC 收到轨道: kind=%s codec=%s pt=%d", track.Kind(), codec.MimeType, codec.PayloadType)
 
-		isVideo := track.Kind() == webrtc.RTPCodecTypeVideo
 		port := audioPort
-		if isVideo {
+		if track.Kind() == webrtc.RTPCodecTypeVideo {
 			atomic.StoreInt32(videoPT, int32(codec.PayloadType))
 			port = videoPort
-			ssrc := uint32(track.SSRC())
-			// 周期性 PLI 请求关键帧（丢帧时另有即时补发，见 forwardVideo）
+			// 周期性 PLI 请求关键帧，确保 ffmpeg 尽快拿到 SPS/PPS+IDR
 			go func() {
-				p.sendPLI(pc, ssrc, 0) // 立即请求一次，缩短拿到 SPS+IDR 的时间
+				// 立即请求一次关键帧，缩短拿到 SPS（分辨率）的时间
+				_ = pc.WriteRTCP([]rtcp.Packet{&rtcp.PictureLossIndication{MediaSSRC: uint32(track.SSRC())}})
 				t := time.NewTicker(2 * time.Second)
 				defer t.Stop()
 				for {
@@ -385,7 +381,7 @@ func (p *Parser) newPeerConnection(cd connectedData, tracksReady, videoPT, audio
 					case <-p.stopCh:
 						return
 					case <-t.C:
-						p.sendPLI(pc, ssrc, 0)
+						_ = pc.WriteRTCP([]rtcp.Packet{&rtcp.PictureLossIndication{MediaSSRC: uint32(track.SSRC())}})
 					}
 				}
 			}()
@@ -397,8 +393,7 @@ func (p *Parser) newPeerConnection(cd connectedData, tracksReady, videoPT, audio
 			}
 		}
 
-		// 两条轨道都到齐后启动 ffmpeg 监听（此时 PT 已确定）；视频要等首个干净 IDR
-		// 才真正开闸转发（见 forwardVideo），ffmpeg 先就位即可。
+		// 两条轨道都到齐后再启动 ffmpeg（此时 PT 已确定）
 		if atomic.AddInt32(tracksReady, 1) >= 2 {
 			tryStartFFmpeg()
 		}
@@ -409,229 +404,18 @@ func (p *Parser) newPeerConnection(cd connectedData, tracksReady, videoPT, audio
 			return
 		}
 		defer conn.Close()
-		// 增大本地 UDP 发送缓冲
-		if uc, ok := conn.(*net.UDPConn); ok {
-			_ = uc.SetWriteBuffer(8 << 20)
-		}
-		// 解耦：track 读取与 UDP 写入分离，避免写入抖动反压导致 pion 侧丢包。
-		// 单写协程保证 FIFO 顺序，通道足够大，localhost 写入极快，几乎不会丢。
-		pktCh := make(chan []byte, 4096)
-		go func() {
-			for b := range pktCh {
-				_, _ = conn.Write(b)
+		buf := make([]byte, 1600)
+		for {
+			n, _, rerr := track.Read(buf)
+			if rerr != nil {
+				return
 			}
-		}()
-		if isVideo {
-			p.forwardVideo(pc, track, pktCh)
-		} else {
-			p.forwardAudio(track, pktCh)
+			p.markMedia()
+			_, _ = conn.Write(buf[:n])
 		}
 	})
 
 	return pc, nil
-}
-
-// ---- 视频帧重组与转发：按 H264 访问单元(AU)重组，只转发完整帧，首个干净 IDR 才开闸 ----
-
-const pliMinInterval = 300 * time.Millisecond // 丢帧补发 PLI 的最小间隔，避免风暴
-
-// auAssembler 累积当前访问单元(AU)的已序列化 RTP 包，并跟踪完整性与 NAL 类型。
-// auAssembler 累积当前访问单元(AU)的已序列化 RTP 包，并跟踪完整性与 NAL 类型。
-// 完整性按"序号区间"判断而非到达顺序，以容忍 UDP 乱序：一帧的所有包时间戳相同，
-// 当出现更新的时间戳时收口该帧；count==maxSeq-minSeq+1 且见过 marker ⇒ 无缺包。
-type auAssembler struct {
-	have      bool
-	ts        uint32
-	minSeq    uint16
-	maxSeq    uint16
-	count     int
-	sawMarker bool
-	hasIDR    bool
-	hasSPS    bool
-	hasPPS    bool
-	pkts      [][]byte
-}
-
-func (a *auAssembler) reset() {
-	a.have = false
-	a.count = 0
-	a.sawMarker = false
-	a.hasIDR, a.hasSPS, a.hasPPS = false, false, false
-	a.pkts = a.pkts[:0]
-}
-
-// forwardVideo 读取视频 RTP，按 AU 重组：完整 AU 才转发，首个含 IDR 的完整 AU 开闸；
-// 丢弃不完整 AU 时即时(限频)补发 PLI 以尽快恢复参考链，避免绿幕/花屏。
-func (p *Parser) forwardVideo(pc *webrtc.PeerConnection, track *webrtc.TrackRemote, pktCh chan<- []byte) {
-	ssrc := uint32(track.SSRC())
-	asm := &auAssembler{}
-	var paramSetAU [][]byte // 最近一个完整的 SPS/PPS 参数集 AU（IDR 不含 SPS 时备用补发）
-	start := time.Now()
-	for {
-		pkt, _, err := track.ReadRTP()
-		if err != nil {
-			close(pktCh)
-			return
-		}
-		p.markMedia()
-		// 按时间戳分帧（容忍乱序）：更新的时间戳 ⇒ 上一帧收口；更旧的 ⇒ 迟到残包丢弃。
-		if asm.have {
-			switch d := int32(pkt.Timestamp - asm.ts); {
-			case d < 0:
-				continue // 上一帧的迟到残包，丢弃，不打断当前帧
-			case d > 0:
-				p.flushVideoAU(asm, &paramSetAU, pc, ssrc, pktCh, start)
-				asm.reset()
-			}
-		}
-		raw, mErr := pkt.Marshal()
-		if mErr != nil {
-			continue
-		}
-		if !asm.have {
-			asm.have = true
-			asm.ts = pkt.Timestamp
-			asm.minSeq = pkt.SequenceNumber
-			asm.maxSeq = pkt.SequenceNumber
-		}
-		if int16(pkt.SequenceNumber-asm.minSeq) < 0 {
-			asm.minSeq = pkt.SequenceNumber
-		}
-		if int16(pkt.SequenceNumber-asm.maxSeq) > 0 {
-			asm.maxSeq = pkt.SequenceNumber
-		}
-		asm.count++
-		asm.pkts = append(asm.pkts, raw)
-		if pkt.Marker {
-			asm.sawMarker = true
-		}
-		classifyNAL(pkt.Payload, asm)
-	}
-}
-
-// flushVideoAU 处理一个收口的 AU：完整则按门控转发，不完整则丢弃并补发 PLI。
-func (p *Parser) flushVideoAU(asm *auAssembler, paramSetAU *[][]byte, pc *webrtc.PeerConnection, ssrc uint32, pktCh chan<- []byte, start time.Time) {
-	if !asm.have || asm.count == 0 {
-		return
-	}
-	// 序号区间连续且见过 marker（帧尾）⇒ 无缺包；乱序不影响该判断。
-	complete := asm.sawMarker && asm.count == int(asm.maxSeq-asm.minSeq)+1
-	if !complete {
-		// 不完整 AU：丢弃，并即时(限频)补发 PLI 请求新关键帧，缩短定格/漂移窗口
-		p.sendPLI(pc, ssrc, pliMinInterval)
-		return
-	}
-	// 缓存仅含参数集(SPS/PPS、无 IDR)的完整 AU，供 IDR 不含 SPS 时补发
-	if (asm.hasSPS || asm.hasPPS) && !asm.hasIDR {
-		*paramSetAU = clonePkts(asm.pkts)
-	}
-	if atomic.LoadInt32(&p.videoLive) == 0 {
-		haveSPS := asm.hasSPS || len(*paramSetAU) > 0
-		// 兜底：久未获完整 IDR 时降级开闸；但必须已有 SPS，否则 ffmpeg 无法确定分辨率而退出。
-		forceOpen := haveSPS && time.Since(start) > 8*time.Second
-		if !asm.hasIDR && !forceOpen {
-			return // 开闸前的非 IDR 帧无参考，丢弃以免绿幕
-		}
-		if !asm.hasSPS && len(*paramSetAU) > 0 { // IDR 不含 SPS 时先补参数集
-			for _, b := range *paramSetAU {
-				trySend(pktCh, b)
-			}
-		}
-		atomic.StoreInt32(&p.videoLive, 1)
-		if asm.hasIDR {
-			p.logger.Debugf("WebRTC 视频开闸（首个干净 IDR，耗时 %s）", time.Since(start).Truncate(time.Millisecond))
-		} else {
-			p.logger.Warn("WebRTC 8s 未获完整 IDR，已带 SPS 降级开闸（开头可能短暂花屏）")
-		}
-	}
-	for _, b := range asm.pkts {
-		trySend(pktCh, b)
-	}
-}
-
-// forwardAudio 转发音频 RTP；非纯音频模式下，首个视频 IDR 开闸前丢弃音频，避免开头只有声音。
-func (p *Parser) forwardAudio(track *webrtc.TrackRemote, pktCh chan<- []byte) {
-	for {
-		pkt, _, err := track.ReadRTP()
-		if err != nil {
-			close(pktCh)
-			return
-		}
-		p.markMedia()
-		if !p.audioOnly && atomic.LoadInt32(&p.videoLive) == 0 {
-			continue // 等视频开闸，丢弃前导音频
-		}
-		raw, mErr := pkt.Marshal()
-		if mErr != nil {
-			continue
-		}
-		trySend(pktCh, raw)
-	}
-}
-
-// sendPLI 发送 PLI 请求关键帧；minInterval>0 时按上次发送时间限频，避免 PLI 风暴。
-func (p *Parser) sendPLI(pc *webrtc.PeerConnection, ssrc uint32, minInterval time.Duration) {
-	now := time.Now().UnixNano()
-	last := atomic.LoadInt64(&p.lastPLIUnixNano)
-	if minInterval > 0 && now-last < int64(minInterval) {
-		return
-	}
-	if !atomic.CompareAndSwapInt64(&p.lastPLIUnixNano, last, now) {
-		return
-	}
-	if pc != nil {
-		_ = pc.WriteRTCP([]rtcp.Packet{&rtcp.PictureLossIndication{MediaSSRC: ssrc}})
-	}
-}
-
-func trySend(pktCh chan<- []byte, b []byte) {
-	select {
-	case pktCh <- b:
-	default: // 通道满（极罕见）时丢弃，优先保证 ReadRTP 不被阻塞
-	}
-}
-
-func clonePkts(pkts [][]byte) [][]byte {
-	out := make([][]byte, len(pkts))
-	copy(out, pkts) // 仅复制指针；底层 []byte 为每次 Marshal 新分配，不会被复用覆盖
-	return out
-}
-
-// classifyNAL 解析 RTP H264 载荷，标记该 AU 是否含 IDR/SPS/PPS（支持单 NAL / STAP-A / FU-A）。
-func classifyNAL(payload []byte, asm *auAssembler) {
-	if len(payload) == 0 {
-		return
-	}
-	switch t := payload[0] & 0x1F; {
-	case t >= 1 && t <= 23: // 单一 NAL
-		markNAL(t, asm)
-	case t == 24: // STAP-A：[hdr] 后接若干 [2字节size][NAL]
-		i := 1
-		for i+2 <= len(payload) {
-			size := int(payload[i])<<8 | int(payload[i+1])
-			i += 2
-			if size <= 0 || i+size > len(payload) {
-				break
-			}
-			markNAL(payload[i]&0x1F, asm)
-			i += size
-		}
-	case t == 28: // FU-A：真实 NAL 类型在 FU header（对所有分片均有效）
-		if len(payload) >= 2 {
-			markNAL(payload[1]&0x1F, asm)
-		}
-	}
-}
-
-func markNAL(t byte, asm *auAssembler) {
-	switch t {
-	case 5:
-		asm.hasIDR = true
-	case 7:
-		asm.hasSPS = true
-	case 8:
-		asm.hasPPS = true
-	}
 }
 
 // startFFmpeg 启动 ffmpeg 读取本地 RTP（经 SDP 描述）并混流写入 file。
@@ -650,15 +434,10 @@ func (p *Parser) startFFmpeg(ctx context.Context, ffmpegPath, sdp, file string) 
 		"-hide_banner", "-nostats",
 		"-progress", "-",
 		"-protocol_whitelist", "file,udp,rtp",
-		// 因为转发已门控到"首个干净 IDR"开始（首批视频即 SPS+IDR），ffmpeg 能很快
-		// 确定分辨率，故无需 10s/10MB 的长分析；适当调小以加快落盘与首帧输出。
-		"-analyzeduration", "3000000",
-		"-probesize", "5000000",
-		// 抗丢包/乱序：增大 UDP 接收缓冲（关键帧大量分片时不溢出）与 RTP 重排队列；
-		// max_delay 由 5s 降到 1s——重组已在上游丢弃残帧，无需为乱序等待过久，显著加快启动。
-		"-buffer_size", "33554432",
-		"-reorder_queue_size", "4096",
-		"-max_delay", "1000000",
+		// 让 ffmpeg 在写 Matroska 头前充分分析输入，确保已从 H264 关键帧解析出
+		// SPS（分辨率），否则会报 "dimensions not set / Could not write header"。
+		"-analyzeduration", "10000000",
+		"-probesize", "10000000",
 		"-fflags", "+genpts",
 		"-i", sdpFile.Name(),
 	}
