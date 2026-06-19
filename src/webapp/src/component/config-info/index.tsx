@@ -555,6 +555,31 @@ const GlobalSettings: React.FC<{
               </Select>
             </Form.Item>
           </ConfigField>
+          <ConfigField
+            label="录制引擎 (仅 WebRTC 直播)"
+            description="仅对 boyfriend.show 等 WebRTC 直播生效。进程内：快、稳、偶有花屏；无头浏览器：画面干净无绿幕/花屏，但更吃 CPU 且需本机 Chrome/Edge。"
+          >
+            <Form.Item name={['feature', 'recording_engine']} noStyle>
+              <Select style={{ width: 280 }} placeholder="默认：进程内直转">
+                <Select.Option value="webrtc">进程内直转 (默认，快/稳)</Select.Option>
+                <Select.Option value="browser">无头浏览器 (无花屏，更吃 CPU)</Select.Option>
+              </Select>
+            </Form.Item>
+          </ConfigField>
+          <ConfigField
+            label="录制画质 (浏览器引擎)"
+            description="仅当录制引擎为“无头浏览器”时生效；默认取源画质（最高）。"
+          >
+            <Form.Item name={['feature', 'recording_quality']} noStyle>
+              <Select style={{ width: 280 }} placeholder="默认：源画质 (最高)">
+                <Select.Option value="source">源画质 (最高)</Select.Option>
+                <Select.Option value="1080p">1080p</Select.Option>
+                <Select.Option value="720p">720p</Select.Option>
+                <Select.Option value="480p">480p</Select.Option>
+                <Select.Option value="360p">360p</Select.Option>
+              </Select>
+            </Form.Item>
+          </ConfigField>
           <ConfigField label="移除特殊字符" description="从文件名中移除特殊字符">
             <Form.Item name={['feature', 'remove_symbol_other_character']} valuePropName="checked" noStyle>
               <Switch />

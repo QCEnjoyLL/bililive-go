@@ -1518,6 +1518,12 @@ func applyConfigUpdates(c *configs.Config, updates map[string]interface{}) error
 		if removeSymbolOther, ok := feature["remove_symbol_other_character"].(bool); ok {
 			c.Feature.RemoveSymbolOtherCharacter = removeSymbolOther
 		}
+		if recordingEngine, ok := feature["recording_engine"].(string); ok {
+			c.Feature.RecordingEngine = recordingEngine
+		}
+		if recordingQuality, ok := feature["recording_quality"].(string); ok {
+			c.Feature.RecordingQuality = recordingQuality
+		}
 	}
 
 	// 处理视频分割策略
@@ -1980,6 +1986,12 @@ func applyOverridableConfigUpdates(oc *configs.OverridableConfig, updates map[st
 		}
 		if enableFlvProxySegment, ok := feature["enable_flv_proxy_segment"].(bool); ok {
 			oc.Feature.EnableFlvProxySegment = enableFlvProxySegment
+		}
+		if recordingEngine, ok := feature["recording_engine"].(string); ok {
+			oc.Feature.RecordingEngine = recordingEngine
+		}
+		if recordingQuality, ok := feature["recording_quality"].(string); ok {
+			oc.Feature.RecordingQuality = recordingQuality
 		}
 	}
 
