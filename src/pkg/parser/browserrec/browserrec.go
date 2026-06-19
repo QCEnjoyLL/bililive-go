@@ -89,17 +89,49 @@ func init() {
 type builder struct{}
 
 func (b *builder) Build(cfg map[string]string, logger *livelogger.LiveLogger) (parser.Parser, error) {
+	w, h := qualityToWindow(cfg["recording_quality"])
 	return &Parser{
 		closeOnce:   new(sync.Once),
 		stopCh:      make(chan struct{}),
 		browserPath: cfg["browser_path"], // 可选：指定 Chrome/Edge/Chromium 路径；留空则自动探测
+		winW:        w,
+		winH:        h,
+		quality:     cfg["recording_quality"],
 		logger:      logger,
 	}, nil
+}
+
+// qualityLabel 返回用于日志的画质档位名（空/source/1080p 等）。
+func qualityLabel(q string) string {
+	if q == "" {
+		return "source(默认最高)"
+	}
+	return q
+}
+
+// qualityToWindow 把清晰度档位映射为无头窗口尺寸。
+// 该站为自适应 WebRTC 播放器，画质跟随播放器/视口大小：窗口越大画质越高（至源画质封顶）。
+// 这是比驱动隐藏的画质菜单更稳健的选择方式。
+func qualityToWindow(q string) (int, int) {
+	switch q {
+	case "720p":
+		return 1280, 720
+	case "480p":
+		return 854, 480
+	case "360p":
+		return 640, 360
+	case "1080p", "source", "":
+		return 1920, 1080 // 默认取最高（源画质上限通常为 1080p）
+	default:
+		return 1920, 1080
+	}
 }
 
 type Parser struct {
 	logger      *livelogger.LiveLogger
 	browserPath string
+	winW, winH  int
+	quality     string
 
 	closeOnce *sync.Once
 	stopCh    chan struct{}
@@ -149,7 +181,7 @@ func (p *Parser) ParseLiveStream(ctx context.Context, _ *live.StreamUrlInfo, liv
 		chromedp.Flag("autoplay-policy", "no-user-gesture-required"),
 		chromedp.Flag("use-fake-ui-for-media-stream", true),
 		chromedp.Flag("mute-audio", false),
-		chromedp.WindowSize(1280, 720),
+		chromedp.WindowSize(p.winW, p.winH),
 	)
 	if p.browserPath != "" {
 		opts = append(opts, chromedp.ExecPath(p.browserPath))
@@ -205,12 +237,41 @@ func (p *Parser) ParseLiveStream(ctx context.Context, _ *live.StreamUrlInfo, liv
 		return fmt.Errorf("browserrec: %s 未在 %s 内就绪（未开播/年龄门/headless 不播放）", pageURL, videoReadyTO)
 	}
 
+	// 自适应画质会从低分辨率逐步爬升到匹配窗口的档位；等其稳定后再开录，
+	// 否则会录到初始的低分辨率（MediaRecorder 以首帧分辨率为准）。最多等约 12s。
+	var lastH, stable, finalH int
+	for i := 0; i < 12; i++ {
+		var h int
+		_ = chromedp.Run(bctx, chromedp.Evaluate(`(document.querySelector('video')||{}).videoHeight||0`, &h))
+		p.logger.Debugf("browserrec 画质爬升[%d] videoHeight=%d", i, h)
+		finalH = h
+		if h > 0 && h >= p.winH {
+			break // 已达目标档位
+		}
+		if h > 0 && h == lastH {
+			stable++
+		} else {
+			stable = 0
+		}
+		if stable >= 3 {
+			break // 连续 3 次不变 → 已到源画质上限
+		}
+		lastH = h
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-p.stopCh:
+			return nil
+		case <-time.After(1 * time.Second):
+		}
+	}
+
 	var info string
 	if e := chromedp.Run(bctx, chromedp.Evaluate(recordJS, &info)); e != nil {
 		return fmt.Errorf("browserrec: 开录失败: %w", e)
 	}
 	atomic.StoreInt64(&p.lastChunkNano, time.Now().UnixNano())
-	p.logger.Infof("browserrec 开始录制 %s（%s）-> %s", pageURL, info, file)
+	p.logger.Infof("browserrec 开始录制 %s（%s，画质档=%s，实际高=%dp）-> %s", pageURL, info, qualityLabel(p.quality), finalH, file)
 
 	// 阻塞直到停止/取消/浏览器退出/长时间无数据
 	ticker := time.NewTicker(2 * time.Second)

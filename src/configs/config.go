@@ -65,6 +65,11 @@ type Feature struct {
 	//   ""/"webrtc" (默认): 进程内直转，快速稳定，丢包时可能有少量花屏
 	//   "browser": 无头浏览器解码后再录，画面干净无绿幕/花屏，但更吃 CPU、需要 Chrome/Edge
 	RecordingEngine string `yaml:"recording_engine,omitempty" json:"recording_engine,omitempty"`
+
+	// RecordingQuality 仅对 browser 引擎生效，选择录制画质（自适应播放器按窗口大小取流）：
+	//   ""/"source"/"1080p" (默认): 最高，至源画质封顶
+	//   "720p" / "480p" / "360p": 越低越省 CPU/带宽
+	RecordingQuality string `yaml:"recording_quality,omitempty" json:"recording_quality,omitempty"`
 }
 
 // GetEffectiveRecordingEngine 返回实际生效的 WebRTC 录制引擎（默认 "webrtc"）

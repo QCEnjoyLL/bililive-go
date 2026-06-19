@@ -427,9 +427,10 @@ func (r *recorder) tryRecord(ctx context.Context) {
 		return
 	}
 	parserCfg := map[string]string{
-		"timeout_in_us":    strconv.Itoa(resolvedConfig.TimeoutInUs),
-		"audio_only":       strconv.FormatBool(info.AudioOnly),
-		"recording_engine": resolvedConfig.Feature.GetEffectiveRecordingEngine(),
+		"timeout_in_us":     strconv.Itoa(resolvedConfig.TimeoutInUs),
+		"audio_only":        strconv.FormatBool(info.AudioOnly),
+		"recording_engine":  resolvedConfig.Feature.GetEffectiveRecordingEngine(),
+		"recording_quality": resolvedConfig.Feature.RecordingQuality,
 	}
 	// 使用层级配置的下载器类型
 	downloaderType := resolvedConfig.Feature.GetEffectiveDownloaderType()
