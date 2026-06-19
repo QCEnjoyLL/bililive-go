@@ -45,7 +45,7 @@ jobs:
       - uses: actions/setup-go@v6
         if: ${{ steps.cache_web_build.outputs.cache-hit != 'true' && github.event.inputs.is_force != 'true' }}
         with:
-          go-version: '1.25'
+          go-version: '1.26'
           cache: true
           cache-dependency-path: '**/go.sum'
 

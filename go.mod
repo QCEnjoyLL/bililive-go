@@ -10,6 +10,8 @@ require (
 	github.com/andybalholm/brotli v1.1.0
 	github.com/bluele/gcache v0.0.0-20190518031135-bc40bd653833
 	github.com/bluenviron/mediacommon/v2 v2.7.2
+	github.com/chromedp/cdproto v0.0.0-20260321001828-e3e3800016bc
+	github.com/chromedp/chromedp v0.15.1
 	github.com/dop251/goja v0.0.0-20260311135729-065cd970411c
 	github.com/getsentry/sentry-go v0.31.1
 	github.com/go-delve/delve v1.26.0
@@ -19,6 +21,8 @@ require (
 	github.com/hr3lxphr6j/requests v0.0.1
 	github.com/joho/godotenv v1.5.1
 	github.com/kira1928/remotetools v0.3.5
+	github.com/pion/rtcp v1.2.16
+	github.com/pion/webrtc/v4 v4.2.15
 	github.com/prometheus/client_golang v1.11.0
 	github.com/robertkrimen/otto v0.5.1
 	github.com/satori/go.uuid v1.2.1-0.20181028125025-b2ce2384e17b
@@ -48,8 +52,6 @@ require (
 	github.com/alecthomas/units v0.0.0-20190924025748-f65c72e2690d // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
-	github.com/chromedp/cdproto v0.0.0-20260321001828-e3e3800016bc // indirect
-	github.com/chromedp/chromedp v0.15.1 // indirect
 	github.com/chromedp/sysutil v1.1.0 // indirect
 	github.com/cilium/ebpf v0.11.0 // indirect
 	github.com/cosiner/argv v0.1.0 // indirect
@@ -94,7 +96,6 @@ require (
 	github.com/pion/logging v0.2.4 // indirect
 	github.com/pion/mdns/v2 v2.1.0 // indirect
 	github.com/pion/randutil v0.1.0 // indirect
-	github.com/pion/rtcp v1.2.16 // indirect
 	github.com/pion/rtp v1.10.2 // indirect
 	github.com/pion/sctp v1.10.0 // indirect
 	github.com/pion/sdp/v3 v3.0.18 // indirect
@@ -102,7 +103,6 @@ require (
 	github.com/pion/stun/v3 v3.1.5 // indirect
 	github.com/pion/transport/v4 v4.0.2 // indirect
 	github.com/pion/turn/v5 v5.0.9 // indirect
-	github.com/pion/webrtc/v4 v4.2.15 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/power-devops/perfstat v0.0.0-20210106213030-5aafc221ea8c // indirect
 	github.com/prometheus/client_model v0.2.0 // indirect

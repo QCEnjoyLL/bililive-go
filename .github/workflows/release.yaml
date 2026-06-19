@@ -56,7 +56,7 @@ jobs:
           fi
       - uses: actions/setup-go@v6
         with:
-          go-version: '1.25'
+          go-version: '1.26'
           cache: true
           cache-dependency-path: '**/go.sum'
       - name: Restore cache of built web (src/webapp/build)
