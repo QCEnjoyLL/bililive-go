@@ -113,11 +113,18 @@ func (l *Live) GetInfo() (*live.Info, error) {
 	if hostName == "" {
 		hostName = l.roomID()
 	}
+	isLive := item.Get("isLive").Bool()
+	status := item.Get("status").String()
+	// 仅 public 视为可录；isLive 但非 public（如 groupShow/privateShow 群秀/私密秀）
+	// 公开观众拿不到画面流，记录原因便于排查（避免误以为程序坏了）。
+	if isLive && status != "public" {
+		l.GetLogger().Debugf("房间在播但非公开(status=%s)，公开观众无画面，暂不录制", status)
+	}
 	return &live.Info{
 		Live:      l,
 		HostName:  hostName,
 		RoomName:  hostName,
-		Status:    item.Get("isLive").Bool() && item.Get("status").String() == "public",
+		Status:    isLive && status == "public",
 		AudioOnly: l.Options.AudioOnly,
 	}, nil
 }

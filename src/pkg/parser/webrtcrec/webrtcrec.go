@@ -197,6 +197,7 @@ func (p *Parser) ParseLiveStream(ctx context.Context, streamUrlInfo *live.Stream
 		pc           *webrtc.PeerConnection
 		pendingOffer string
 		tracksReady  int32
+		pcConnected  int32 // PC 是否成功建连（用于区分"网络连不上" vs "连上但无媒体"）
 		videoPT      = int32(102)
 		audioPT      = int32(111)
 		audioClock   = int32(48000)
@@ -225,7 +226,11 @@ signalingLoop:
 		case <-p.stopCh:
 			return nil
 		case <-handshakeTimer.C:
-			return fmt.Errorf("WebRTC 建连超时（未在 %s 内收到媒体）", handshakeTO)
+			// 区分两种失败，给出可操作的诊断
+			if atomic.LoadInt32(&pcConnected) == 1 {
+				return fmt.Errorf("WebRTC 已连接但 %s 内未收到媒体：主播可能切到了群秀/私密秀或暂停推流（公开观众拿不到画面），待其恢复公开直播即可", handshakeTO)
+			}
+			return fmt.Errorf("WebRTC 未能在 %s 内建立连接：可能网络/TURN 受限，或该房间非 WebRTC 推流", handshakeTO)
 		case rerr := <-wsErrCh:
 			return fmt.Errorf("WebRTC 信令中断: %w", rerr)
 		case startErr := <-ffmpegStarted:
@@ -238,7 +243,7 @@ signalingLoop:
 			case "connected":
 				var cd connectedData
 				_ = json.Unmarshal(m.Data, &cd)
-				pc, err = p.newPeerConnection(cd, &tracksReady, &videoPT, &audioPT, &audioClock, &audioCh, videoPort, audioPort, tryStartFFmpeg, pcFailed)
+				pc, err = p.newPeerConnection(cd, &tracksReady, &videoPT, &audioPT, &audioClock, &audioCh, &pcConnected, videoPort, audioPort, tryStartFFmpeg, pcFailed)
 				if err != nil {
 					return fmt.Errorf("创建 PeerConnection 失败: %w", err)
 				}
@@ -329,7 +334,7 @@ signalingLoop:
 	}
 }
 
-func (p *Parser) newPeerConnection(cd connectedData, tracksReady, videoPT, audioPT, audioClock, audioCh *int32,
+func (p *Parser) newPeerConnection(cd connectedData, tracksReady, videoPT, audioPT, audioClock, audioCh, pcConnected *int32,
 	videoPort, audioPort int, tryStartFFmpeg func(), pcFailed chan struct{}) (*webrtc.PeerConnection, error) {
 
 	cfg := webrtc.Configuration{ICETransportPolicy: webrtc.ICETransportPolicyRelay}
@@ -354,6 +359,9 @@ func (p *Parser) newPeerConnection(cd connectedData, tracksReady, videoPT, audio
 
 	pc.OnConnectionStateChange(func(s webrtc.PeerConnectionState) {
 		p.logger.Debugf("WebRTC PC 状态: %s", s)
+		if s == webrtc.PeerConnectionStateConnected {
+			atomic.StoreInt32(pcConnected, 1)
+		}
 		if s == webrtc.PeerConnectionStateFailed || s == webrtc.PeerConnectionStateClosed || s == webrtc.PeerConnectionStateDisconnected {
 			select {
 			case pcFailed <- struct{}{}:
