@@ -156,6 +156,15 @@ func (l *Live) GetStreamInfos() ([]*live.StreamUrlInfo, error) {
 	}
 	srcBitrate := int(settings.Get("video.bitrate").Int() / 1000)
 
+	// 内置 WebRTC 引擎基于 H264：遇到 H265/HEVC 或非 webrtc 推流(如 rtmp)的房间无法建连录制。
+	// 给出可操作提示——这类房间需改用浏览器引擎(recording_engine: browser，由站点播放器解码)。
+	mediaTransport := settings.Get("mediaTransport").String()
+	lc := strings.ToLower(codec)
+	if (mediaTransport != "" && mediaTransport != "webrtc") || lc == "h265" || lc == "hevc" {
+		l.GetLogger().Warnf("房间为 %s 推流、编码 %s：内置 WebRTC 引擎(仅支持 H264)无法录制，请将该房间改用浏览器引擎(recording_engine: browser)",
+			mediaTransport, codec)
+	}
+
 	headers := map[string]string{
 		"User-Agent": userAgent,
 		"Referer":    referer,
