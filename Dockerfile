@@ -31,7 +31,12 @@ RUN mkdir -p $OUTPUT_DIR && \
     curl \
     tzdata \
     ca-certificates \
-    libatomic1 && \
+    libatomic1 \
+    `# 浏览器录制引擎(recording_engine: browser)所需的 Chromium 运行依赖；` \
+    `# amd64 会自动下载 Chrome for Testing 并用这些库启动。无浏览器引擎时不影响。` \
+    libnss3 libnspr4 libgbm1 libasound2 libxkbcommon0 libxshmfence1 \
+    libxdamage1 libxcomposite1 libxrandr2 libxfixes3 libxext6 libxi6 \
+    libgtk-3-0 libpango-1.0-0 libcairo2 libdrm2 fonts-liberation && \
     sh -c '\
     if [ "$TARGETARCH" = "arm" ]; then \
     echo "skip gosu for arm (armv7/armhf)"; \

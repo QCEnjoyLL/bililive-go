@@ -95,6 +95,7 @@ func (b *builder) Build(cfg map[string]string, logger *livelogger.LiveLogger) (p
 	w, h := qualityToWindow(cfg["recording_quality"])
 	return &Parser{
 		closeOnce:   new(sync.Once),
+		cleanupOnce: new(sync.Once),
 		stopCh:      make(chan struct{}),
 		browserPath: cfg["browser_path"], // 可选：指定 Chrome/Edge/Chromium 路径；留空则自动探测
 		winW:        w,
@@ -194,15 +195,19 @@ type Parser struct {
 	winW, winH  int
 	quality     string
 
-	closeOnce *sync.Once
-	stopCh    chan struct{}
+	closeOnce   *sync.Once
+	cleanupOnce *sync.Once
+	stopCh      chan struct{}
 
 	mu       sync.Mutex
 	stdin    io.WriteCloser
 	cmd      *exec.Cmd
+	bctx     context.Context
 	cancelFn context.CancelFunc
+	outFile  string
 
 	lastChunkNano int64
+	bytesWritten  int64
 }
 
 func (p *Parser) ParseLiveStream(ctx context.Context, _ *live.StreamUrlInfo, liveObj live.Live, file string) error {
@@ -213,30 +218,7 @@ func (p *Parser) ParseLiveStream(ctx context.Context, _ *live.StreamUrlInfo, liv
 		return fmt.Errorf("browserrec: 找不到 ffmpeg: %w", err)
 	}
 
-	// ffmpeg: 从 stdin 读 WebM，-c copy 封装为 .mkv（WebM ⊂ Matroska，不重编码）。
-	cmd := exec.Command(ffmpegPath,
-		"-hide_banner", "-nostats",
-		"-fflags", "+genpts",
-		"-i", "pipe:0",
-		"-c", "copy",
-		"-y", file,
-	)
-	stdin, err := cmd.StdinPipe()
-	if err != nil {
-		return err
-	}
-	stderr, _ := cmd.StderrPipe()
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("browserrec: 启动 ffmpeg 失败: %w", err)
-	}
-	if stderr != nil {
-		go drainToLog(stderr, p.logger)
-	}
-	p.mu.Lock()
-	p.cmd, p.stdin = cmd, stdin
-	p.mu.Unlock()
-
-	// 无头浏览器
+	// 1) 启动无头浏览器（ffmpeg 推迟到画面就绪后再起，避免启动失败时泄漏 ffmpeg/留碎片）
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
 		chromedp.Flag("headless", "new"),
 		chromedp.Flag("autoplay-policy", "no-user-gesture-required"),
@@ -250,11 +232,13 @@ func (p *Parser) ParseLiveStream(ctx context.Context, _ *live.StreamUrlInfo, liv
 	allocCtx, cancelAlloc := chromedp.NewExecAllocator(context.Background(), opts...)
 	bctx, cancelB := chromedp.NewContext(allocCtx)
 	p.mu.Lock()
+	p.bctx = bctx
 	p.cancelFn = func() { cancelB(); cancelAlloc() }
+	p.outFile = file
 	p.mu.Unlock()
-	defer func() { cancelB(); cancelAlloc() }()
+	defer p.cleanup() // 统一收尾：停录、关 stdin、杀 ffmpeg、cancel 浏览器、删空文件
 
-	// 收块：解码后写入 ffmpeg stdin
+	// 2) 收块：解码后写入 ffmpeg stdin（stdin 在画面就绪、ffmpeg 启动后才非空）
 	chromedp.ListenTarget(bctx, func(ev interface{}) {
 		be, ok := ev.(*runtime.EventBindingCalled)
 		if !ok || be.Name != "__chunk" {
@@ -267,6 +251,7 @@ func (p *Parser) ParseLiveStream(ctx context.Context, _ *live.StreamUrlInfo, liv
 		p.mu.Lock()
 		if p.stdin != nil {
 			_, _ = p.stdin.Write(data)
+			atomic.AddInt64(&p.bytesWritten, int64(len(data)))
 		}
 		p.mu.Unlock()
 		atomic.StoreInt64(&p.lastChunkNano, time.Now().UnixNano())
@@ -293,7 +278,7 @@ func (p *Parser) ParseLiveStream(ctx context.Context, _ *live.StreamUrlInfo, liv
 	}
 	_ = chromedp.Run(bctx, runtime.AddBinding("__chunk")) // 新页面上下文重加 binding
 
-	// 等 video 就绪（超时即返回错误，交由上层重试，绝不无限卡住）
+	// 等 video 就绪（超时即返回错误，交由上层重试，绝不无限卡住；此时 ffmpeg 尚未启动，不留文件）
 	if !p.waitVideo(ctx, bctx) {
 		return fmt.Errorf("browserrec: %s 未在 %s 内就绪（未开播/年龄门/headless 不播放）", pageURL, videoReadyTO)
 	}
@@ -327,6 +312,30 @@ func (p *Parser) ParseLiveStream(ctx context.Context, _ *live.StreamUrlInfo, liv
 		}
 	}
 
+	// 3) 画面就绪后才启动 ffmpeg：从 stdin 读 WebM，-c copy 封装 .mkv（WebM ⊂ Matroska，不重编码）
+	cmd := exec.Command(ffmpegPath,
+		"-hide_banner", "-nostats",
+		"-fflags", "+genpts",
+		"-i", "pipe:0",
+		"-c", "copy",
+		"-y", file,
+	)
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return fmt.Errorf("browserrec: 创建 ffmpeg stdin 失败: %w", err)
+	}
+	stderr, _ := cmd.StderrPipe()
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("browserrec: 启动 ffmpeg 失败: %w", err)
+	}
+	if stderr != nil {
+		go drainToLog(stderr, p.logger)
+	}
+	p.mu.Lock()
+	p.cmd, p.stdin = cmd, stdin
+	p.mu.Unlock()
+
+	// 4) 开录
 	var info string
 	if e := chromedp.Run(bctx, chromedp.Evaluate(recordJS, &info)); e != nil {
 		return fmt.Errorf("browserrec: 开录失败: %w", e)
@@ -334,39 +343,72 @@ func (p *Parser) ParseLiveStream(ctx context.Context, _ *live.StreamUrlInfo, liv
 	atomic.StoreInt64(&p.lastChunkNano, time.Now().UnixNano())
 	p.logger.Infof("browserrec 开始录制 %s（%s，画质档=%s，实际高=%dp）-> %s", pageURL, info, qualityLabel(p.quality), finalH, file)
 
-	// 阻塞直到停止/取消/浏览器退出/长时间无数据
+	// 5) 阻塞直到停止/取消/浏览器退出/长时间无数据；收尾由 defer cleanup 完成
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
-loop:
 	for {
 		select {
 		case <-ctx.Done():
-			break loop
+			return nil
 		case <-p.stopCh:
-			break loop
+			return nil
 		case <-bctx.Done():
 			p.logger.Warnf("browserrec: 浏览器已退出")
-			break loop
+			return nil
 		case <-ticker.C:
 			if time.Since(time.Unix(0, atomic.LoadInt64(&p.lastChunkNano))) > mediaIdleTO {
 				p.logger.Infof("browserrec: %s 已无数据，判定下播", pageURL)
-				break loop
+				return nil
 			}
 		}
 	}
+}
 
-	// 收尾：停录 → 关 stdin → 等 ffmpeg 收尾 .mkv
-	_ = chromedp.Run(bctx, chromedp.Evaluate(
-		`window.__rec && window.__rec.state!=='inactive' && window.__rec.stop()`, nil))
-	time.Sleep(800 * time.Millisecond) // 等最后一块 flush
-	p.mu.Lock()
-	if p.stdin != nil {
-		_ = p.stdin.Close()
-		p.stdin = nil
-	}
-	p.mu.Unlock()
-	_ = cmd.Wait()
-	return nil
+// cleanup 统一收尾（幂等）：尽力停掉页面内 MediaRecorder 并等最后一块落盘，
+// 关闭 stdin、回收 ffmpeg 与浏览器进程；若全程几乎没写入数据则删除空/碎片文件。
+func (p *Parser) cleanup() {
+	p.cleanupOnce.Do(func() {
+		p.mu.Lock()
+		cmd, stdin, bctx, cancel, out := p.cmd, p.stdin, p.bctx, p.cancelFn, p.outFile
+		p.mu.Unlock()
+
+		// 浏览器若仍在，停 MediaRecorder 并给最后一块时间 flush
+		if bctx != nil && cmd != nil {
+			_ = chromedp.Run(bctx, chromedp.Evaluate(
+				`window.__rec && window.__rec.state!=='inactive' && window.__rec.stop()`, nil))
+			time.Sleep(800 * time.Millisecond)
+		}
+		// 关 stdin，让 ffmpeg 正常收尾
+		p.mu.Lock()
+		if p.stdin != nil {
+			_ = p.stdin.Close()
+			p.stdin = nil
+		}
+		p.mu.Unlock()
+		// 回收 ffmpeg：最多等 8s，超时强杀，杜绝泄漏
+		if cmd != nil && cmd.Process != nil {
+			done := make(chan struct{})
+			go func() { _, _ = cmd.Process.Wait(); close(done) }()
+			select {
+			case <-done:
+			case <-time.After(8 * time.Second):
+				_ = cmd.Process.Kill()
+				<-done
+			}
+		}
+		// 回收浏览器进程
+		if cancel != nil {
+			cancel()
+		}
+		// 启动失败/无数据：删除空或极小（<64KB）的碎片文件
+		if cmd != nil && out != "" && atomic.LoadInt64(&p.bytesWritten) < 64*1024 {
+			if _, statErr := os.Stat(out); statErr == nil {
+				_ = os.Remove(out)
+				p.logger.Infof("browserrec: 本次几乎无数据，已删除碎片文件 %s", out)
+			}
+		}
+		_ = stdin // 已在上面关闭
+	})
 }
 
 // waitVideo 轮询：每秒尝试过年龄门并检查 video 是否拿到 MediaStream。
@@ -396,12 +438,8 @@ func (p *Parser) waitVideo(ctx context.Context, bctx context.Context) bool {
 
 func (p *Parser) Stop() error {
 	p.closeOnce.Do(func() { close(p.stopCh) })
-	p.mu.Lock()
-	cancel := p.cancelFn
-	p.mu.Unlock()
-	if cancel != nil {
-		cancel()
-	}
+	// 走统一收尾：停录、关 stdin、回收 ffmpeg 与浏览器（幂等，与 defer cleanup 二者其一生效）
+	p.cleanup()
 	return nil
 }
 

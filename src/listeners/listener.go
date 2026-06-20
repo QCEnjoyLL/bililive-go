@@ -48,6 +48,8 @@ type listener struct {
 	status status
 	ed     events.Dispatcher
 
+	offlineStreak int // 连续轮询到离线的次数，用于防抖
+
 	state     uint32
 	stop      chan struct{}
 	runCtx    context.Context    // 用于控制 run 循环中的等待
@@ -132,6 +134,20 @@ func (l *listener) run() {
 
 // processInfo 处理获取到的直播间信息，检测状态变化并触发事件
 func (l *listener) processInfo(info *live.Info) {
+	// 离线防抖：连续 offlineConfirmN 次轮询到离线才认定下播。
+	// 避免单次网络抖动 / 接口瞬时波动（isLive 短暂为 false）就误判下线、打断录制。
+	const offlineConfirmN = 2
+	if !info.Status {
+		l.offlineStreak++
+		if l.status.roomStatus && l.offlineStreak < offlineConfirmN {
+			// 当前仍认定在线，且未达连续离线阈值 → 暂不改判，维持在线（不停录）
+			l.Live.GetLogger().Debugf("忽略第 %d 次离线轮询（需连续 %d 次才判定下播）", l.offlineStreak, offlineConfirmN)
+			return
+		}
+	} else {
+		l.offlineStreak = 0
+	}
+
 	// 尝试从缓存中获取主播姓名，以防API调用失败
 	hostName := info.HostName
 	if hostName == "" {
