@@ -559,12 +559,13 @@ const GlobalSettings: React.FC<{
           </ConfigField>
           <ConfigField
             label="录制引擎 (仅 WebRTC 直播)"
-            description="仅对 boyfriend.show 等 WebRTC 直播生效。进程内：快、稳、偶有花屏；无头浏览器：画面干净无绿幕/花屏，但更吃 CPU 且需本机 Chrome/Edge。"
+            description="仅对 boyfriend.show 等 WebRTC 直播生效。HLS 直录：无损、无花屏、无广告、轻量（推荐默认）；进程内：快但偶有花屏；无头浏览器：画面干净但更吃 CPU 且需本机 Chrome/Edge。"
           >
             <Form.Item name={['feature', 'recording_engine']} noStyle>
-              <Select style={{ width: 280 }} placeholder="默认：进程内直转">
-                <Select.Option value="webrtc">进程内直转 (默认，快/稳)</Select.Option>
-                <Select.Option value="browser">无头浏览器 (无花屏，更吃 CPU)</Select.Option>
+              <Select style={{ width: 320 }} placeholder="默认：HLS 直录">
+                <Select.Option value="hls">HLS 直录 (默认，无损/无花屏/轻量)</Select.Option>
+                <Select.Option value="webrtc">进程内直转 (快，偶有花屏)</Select.Option>
+                <Select.Option value="browser">无头浏览器 (干净，吃 CPU)</Select.Option>
               </Select>
             </Form.Item>
           </ConfigField>
@@ -1856,7 +1857,7 @@ export const RoomConfigForm: React.FC<{
           isOverridden: room.feature?.recording_engine != null && room.feature?.recording_engine !== '',
           inheritedValue: (() => {
             const v = (platformConfig as any)?.feature?.recording_engine || globalConfig?.feature?.recording_engine;
-            return v === 'browser' ? '无头浏览器' : '进程内直转 (默认)';
+            return v === 'browser' ? '无头浏览器' : v === 'webrtc' ? '进程内直转' : 'HLS 直录 (默认)';
           })()
         }}
         id={`rooms-live-${room.live_id}-recording_engine`}
@@ -1868,8 +1869,9 @@ export const RoomConfigForm: React.FC<{
             placeholder={`继承${(platformConfig as any)?.feature?.recording_engine ? '平台' : '全局'}设置`}
             allowClear
           >
-            <Select.Option value="webrtc">进程内直转 (默认，快/稳)</Select.Option>
-            <Select.Option value="browser">无头浏览器 (无花屏，更吃 CPU)</Select.Option>
+            <Select.Option value="hls">HLS 直录 (默认，无损/无花屏)</Select.Option>
+            <Select.Option value="webrtc">进程内直转 (快，偶有花屏)</Select.Option>
+            <Select.Option value="browser">无头浏览器 (干净，吃 CPU)</Select.Option>
           </Select>
         </Form.Item>
       </ConfigField>

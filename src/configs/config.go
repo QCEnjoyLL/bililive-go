@@ -72,12 +72,14 @@ type Feature struct {
 	RecordingQuality string `yaml:"recording_quality,omitempty" json:"recording_quality,omitempty"`
 }
 
-// GetEffectiveRecordingEngine 返回实际生效的 WebRTC 录制引擎（默认 "webrtc"）
+// GetEffectiveRecordingEngine 返回实际生效的 WebRTC 录制引擎（默认 "hls"）
 func (f *Feature) GetEffectiveRecordingEngine() string {
-	if f.RecordingEngine == "browser" {
-		return "browser"
+	switch f.RecordingEngine {
+	case "webrtc", "browser", "hls":
+		return f.RecordingEngine
+	default:
+		return "hls" // 默认走 HLS：无损、无花屏、轻量
 	}
-	return "webrtc"
 }
 
 // GetEffectiveDownloaderType 获取实际生效的下载器类型
