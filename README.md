@@ -1,9 +1,6 @@
 # Bililive-go
-[![CI](https://github.com/bililive-go/bililive-go/actions/workflows/tests.yaml/badge.svg?branch=master)](https://github.com/bililive-go/bililive-go/actions/workflows/tests.yaml)
-[![Go Report Card](https://goreportcard.com/badge/github.com/bililive-go/bililive-go)](https://goreportcard.com/report/github.com/bililive-go/bililive-go)
-[![Github release](https://img.shields.io/github/release/bililive-go/bililive-go.svg)](https://github.com/bililive-go/bililive-go/releases/latest)
 [![Docker Pulls](https://img.shields.io/docker/pulls/orangeqiu/bililive-go.svg)](https://hub.docker.com/r/orangeqiu/bililive-go/)
-[![Bilibili](https://img.shields.io/badge/%E5%93%94%E5%93%A9%E5%93%94%E5%93%A9-%E6%9C%AA%E6%9D%A5%E7%A7%91%E6%8A%80%E7%8E%8B%E8%80%81%E8%8F%8A%E5%BD%95%E6%92%AD%E7%BB%84-ebb8d0.svg)](https://space.bilibili.com/18578203/)
+[![Bilibili](https://img.shields.io/badge/%E5%93%94%E5%93%A9%E5%93%94%E5%93%A9-%E6%88%91%E4%B8%8D%E6%98%AF%E9%82%B1%E6%99%A8-ebb8d0.svg)](https://space.bilibili.com/10421164/)
 
 Bililive-go是一个支持多种直播平台的直播录制工具   
 
@@ -386,7 +383,7 @@ bililive-go/
 [Wiki](https://github.com/bililive-go/bililive-go/wiki)
 
 ## API
-[API doc](https://github.com/bililive-go/bililive-go/blob/master/docs/API.md)
+[API doc](docs/API.md)
 
 ## 参考
 - [you-get](https://github.com/soimort/you-get)

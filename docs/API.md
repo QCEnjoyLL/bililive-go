@@ -52,7 +52,7 @@
         "id": "dfb964a56725bbad165cb9ea1ef8ac5b",
         "live_url": "https://live.bilibili.com/1030",
         "platform_cn_name": "哔哩哔哩",
-        "host_name": "怕上火暴王老菊",
+        "host_name": "示例主播",
         "room_name": "直播做饭",
         "status": false,
         "listening": true,

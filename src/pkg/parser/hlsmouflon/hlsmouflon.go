@@ -31,6 +31,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -55,8 +56,12 @@ const (
 	defaultKeystreamHex = "334eff75462ef6a610704bc3d3e7445f"
 
 	pollInterval = 1500 * time.Millisecond
-	mediaIdleTO  = 30 * time.Second // 超过此时长无新分段则判定下播
 	startupTO    = 40 * time.Second // 启动期一直拿不到有效分段则判定未开播/密钥失效
+
+	// 下播判定：区分"网络抖动暂时无新段"与"真下播"。只要 playlist 仍能拉到就认为在播，
+	// 不因短暂无新段误判（避免误判下播 → recorder 5s 后重录、切出多个短文件）。
+	offlineFetchFail = 6               // playlist 连续拉取失败次数（~9s）→ 判定真下播（房间结束/变体消失）
+	mediaStuckTO     = 3 * time.Minute // playlist 仍可拉但超此时长无任何新分段 → 兜底判定卡死下播
 )
 
 // segRe 匹配分段文件名 {id}_{msn}_{hash}_{ts}(_partN).mp4，提取 hash。
@@ -164,6 +169,10 @@ func (p *Parser) ParseLiveStream(ctx context.Context, streamUrlInfo *live.Stream
 	start := time.Now()
 	var decFail int
 	triedBootstrap := false
+	var fetchFail int // playlist 连续拉取失败计数（区分真下播 vs 网络抖动）
+	// 诊断（排查丢段 vs 网络）：累计写入段数、msn 缺口（丢段）、本周期最大单段下载耗时
+	var segTotal, gapTotal, lastMsn, maxDlMs int
+	diagAt := time.Now()
 
 	for {
 		select {
@@ -175,7 +184,10 @@ func (p *Parser) ParseLiveStream(ctx context.Context, streamUrlInfo *live.Stream
 		}
 
 		body, err := p.get(playlist)
-		if err == nil {
+		if err != nil {
+			fetchFail++
+		} else {
+			fetchFail = 0
 			lines := strings.Split(string(body), "\n")
 			if !initDone {
 				if m := mapRe.FindStringSubmatch(string(body)); m != nil {
@@ -205,15 +217,31 @@ func (p *Parser) ParseLiveStream(ctx context.Context, streamUrlInfo *live.Stream
 					continue
 				}
 				seen[realURL] = true
+				t0 := time.Now()
 				seg, e := p.get(realURL)
 				if e != nil {
 					decFail++
 					continue
 				}
+				if ms := int(time.Since(t0).Milliseconds()); ms > maxDlMs {
+					maxDlMs = ms
+				}
 				p.writeSeg(seg)
 				started = true
 				decFail = 0
 				lastData = time.Now()
+				// 诊断：从真实段文件名提取 msn，检测缺口（丢段）
+				segTotal++
+				if mm := segMsnRe.FindStringSubmatch(realURL); mm != nil {
+					if msn, e2 := strconv.Atoi(mm[1]); e2 == nil {
+						if lastMsn > 0 && msn > lastMsn+1 {
+							gapTotal += msn - lastMsn - 1
+						}
+						if msn > lastMsn {
+							lastMsn = msn
+						}
+					}
+				}
 			}
 		}
 
@@ -234,10 +262,24 @@ func (p *Parser) ParseLiveStream(ctx context.Context, streamUrlInfo *live.Stream
 			}
 			return fmt.Errorf("hlsmouflon: %s 启动 %s 内未取到有效分段（未开播，或 MOUFLON 密钥已轮换且自动引导失败；可手动配置 hls_keystream 覆盖）", modelID, startupTO)
 		}
-		// 已开录后长时间无新数据 → 下播
-		if started && time.Since(lastData) > mediaIdleTO {
-			p.logger.Infof("hlsmouflon: %s 已无新分段，判定下播", modelID)
+		// 下播判定（区分真下播 vs 网络抖动）：
+		//  - playlist 连续拉取失败 → 房间结束/变体消失，判定真下播
+		//  - playlist 仍可拉但超久无任何新分段 → 兜底判定卡死
+		// 只要 playlist 还能拉到、只是暂时没有新段，就继续轮询、不误判下播（不触发重录）。
+		if started && fetchFail >= offlineFetchFail {
+			p.logger.Infof("hlsmouflon: %s playlist 连续 %d 次拉取失败，判定下播", modelID, fetchFail)
 			return nil
+		}
+		if started && time.Since(lastData) > mediaStuckTO {
+			p.logger.Infof("hlsmouflon: %s 超过 %s 无新分段（playlist 仍在但卡死），判定下播", modelID, mediaStuckTO)
+			return nil
+		}
+		// 诊断输出（每 ~30s）：丢段统计帮助判断"跟不上丢段"还是"网络波动"
+		if started && time.Since(diagAt) > 30*time.Second {
+			p.logger.Infof("hlsmouflon 诊断 %s：累计写入 %d 段，丢段累计 %d，当前 msn=%d，本周期最大单段下载 %dms",
+				modelID, segTotal, gapTotal, lastMsn, maxDlMs)
+			diagAt = time.Now()
+			maxDlMs = 0
 		}
 
 		select {

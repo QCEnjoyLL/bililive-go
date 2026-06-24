@@ -63,6 +63,8 @@ type ManagerConfig struct {
 	// VersionAPIURL 自定义版本检测 API URL（留空使用默认值）
 	// 可设置为本地 HTTP 服务器地址用于测试自动升级逻辑
 	VersionAPIURL string
+	// GithubToken 私有 fork 仓库的 GitHub Token（留空则匿名）
+	GithubToken string
 }
 
 // NewManager 创建新的更新管理器
@@ -72,6 +74,7 @@ func NewManager(config ManagerConfig) *Manager {
 	}
 
 	checker := NewChecker(config.CurrentVersion)
+	checker.SetGithubToken(config.GithubToken)
 
 	// 版本检测 API 地址优先级：配置值 > 环境变量 > 默认值
 	if config.VersionAPIURL != "" {
@@ -125,15 +128,15 @@ func (m *Manager) SetProgressCallback(ch chan DownloadProgress) {
 }
 
 // CheckForUpdate 检查是否有新版本
-// 优先使用 bililive-go.com API，失败时回退到 GitHub API
+// 直连本 fork 的 GitHub Releases（不再走上游 bililive-go.com 版本服务）
 func (m *Manager) CheckForUpdate(ctx context.Context, includePrerelease bool) (*ReleaseInfo, error) {
 	m.mu.Lock()
 	m.state = UpdateStateChecking
 	m.lastError = ""
 	m.mu.Unlock()
 
-	// 使用带回退的版本检查方法
-	info, err := m.checker.CheckForUpdateWithFallback(includePrerelease)
+	// 直连 fork 的 GitHub Releases API
+	info, err := m.checker.CheckForUpdate(includePrerelease)
 	if err != nil {
 		m.mu.Lock()
 		m.state = UpdateStateFailed

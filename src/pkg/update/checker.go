@@ -15,8 +15,8 @@ import (
 
 // API 地址常量
 const (
-	// GitHubReleasesAPI GitHub Releases API 地址
-	GitHubReleasesAPI = "https://api.github.com/repos/bililive-go/bililive-go/releases"
+	// GitHubReleasesAPI GitHub Releases API 地址（指向本 fork 仓库）
+	GitHubReleasesAPI = "https://api.github.com/repos/QCEnjoyLL/bililive-go/releases"
 	// DefaultVersionAPIURL 默认的版本检测 API 地址
 	DefaultVersionAPIURL = "https://bililive-go.com/api/versions"
 )
@@ -60,6 +60,7 @@ type Checker struct {
 	currentVersion string
 	releaseURL     string
 	versionAPIURL  string // 版本检测 API URL（可自定义测试）
+	githubToken    string // 私有 fork 仓库的 GitHub Token（留空则匿名）
 }
 
 // NewChecker 创建新的版本检查器
@@ -82,6 +83,12 @@ func (c *Checker) SetReleaseURL(url string) {
 // SetVersionAPIURL 设置自定义版本检测 API URL（用于测试本地自动升级逻辑）
 func (c *Checker) SetVersionAPIURL(url string) {
 	c.versionAPIURL = url
+}
+
+// SetGithubToken 设置 GitHub Personal Access Token，用于访问私有 fork 仓库的 Releases。
+// 留空则匿名访问（仅 public 仓库可用）。
+func (c *Checker) SetGithubToken(token string) {
+	c.githubToken = token
 }
 
 // CheckForUpdate 检查是否有新版本
@@ -217,6 +224,10 @@ func (c *Checker) fetchReleases() ([]githubRelease, error) {
 
 	req.Header.Set("Accept", "application/vnd.github.v3+json")
 	req.Header.Set("User-Agent", "bililive-go-updater")
+	// 私有 fork 仓库需带 token，否则 GitHub 返回 404/403
+	if c.githubToken != "" {
+		req.Header.Set("Authorization", "Bearer "+c.githubToken)
+	}
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {

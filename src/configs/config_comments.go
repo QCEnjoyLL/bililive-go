@@ -30,6 +30,9 @@ func DecorateConfigNode(node *yaml.Node) {
 # 也支持纯数字（视为字节），如: 1073741824
 # 有效值为正数，默认值 0 为不限制
 # 负数为非法值，程序会输出 log 提醒，并无视所设定的数值`, "")
+		setFieldComment(splitNode, "max_record_duration",
+			`# 定时录制：单次录制达到此墙钟时长后，停止该房间录制并停止监听、不再自动重录。
+# 支持 90s / 30m / 2h 等格式；0 表示不限制。从开始录制起算（区别于 max_duration 的分段续录）。`, "")
 	}
 
 	finishNode := findNode(root, "on_record_finished")

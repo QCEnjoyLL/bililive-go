@@ -191,6 +191,9 @@ func (m *manager) addRecorderLocked(ctx context.Context, live live.Live) error {
 		if maxDur := cfg.VideoSplitStrategies.MaxDuration; maxDur != 0 {
 			bilisentry.GoWithContext(ctx, func(ctx context.Context) { m.cronRestart(ctx, live) })
 		}
+		if maxRec := cfg.VideoSplitStrategies.MaxRecordDuration; maxRec != 0 {
+			bilisentry.GoWithContext(ctx, func(ctx context.Context) { m.cronStop(ctx, live) })
+		}
 	}
 	if err := recorder.Start(ctx); err != nil {
 		// Start 失败时从 map 删除并异步 Close 新 recorder，防止泄漏/僵尸实例
@@ -220,6 +223,30 @@ func (m *manager) cronRestart(ctx context.Context, live live.Live) {
 	}
 	if err := m.RestartRecorder(ctx, live); err != nil {
 		return
+	}
+}
+
+// cronStop 定时录制：达到 VideoSplitStrategies.MaxRecordDuration（墙钟，从开始录制起算）后，
+// 停止该房间监听 → 触发 ListenStop → RemoveRecorder，且不再自动重录，直到用户手动重启。
+func (m *manager) cronStop(ctx context.Context, live live.Live) {
+	recorder, err := m.GetRecorder(ctx, live.GetLiveId())
+	if err != nil {
+		return // recorder 已不存在（已下播/已停），停止定时
+	}
+	cfg := configs.GetCurrentConfig()
+	if cfg == nil || cfg.VideoSplitStrategies.MaxRecordDuration <= 0 {
+		return
+	}
+	maxRec := cfg.VideoSplitStrategies.MaxRecordDuration
+	if time.Since(recorder.StartTime()) < maxRec {
+		time.AfterFunc(time.Minute/4, func() { m.cronStop(ctx, live) })
+		return
+	}
+	live.GetLogger().Infof("定时录制达到 %s，停止录制并停止监听该房间（不再自动重录）", maxRec)
+	if lm, ok := instance.GetInstance(ctx).ListenerManager.(listeners.Manager); ok {
+		if err := lm.RemoveListener(ctx, live.GetLiveId()); err != nil {
+			live.GetLogger().Warnf("定时停止：移除监听失败: %v", err)
+		}
 	}
 }
 

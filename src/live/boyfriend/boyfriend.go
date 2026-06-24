@@ -15,6 +15,7 @@ import (
 	"github.com/hr3lxphr6j/requests"
 	"github.com/tidwall/gjson"
 
+	"github.com/bililive-go/bililive-go/src/configs"
 	"github.com/bililive-go/bililive-go/src/live"
 	"github.com/bililive-go/bililive-go/src/live/internal"
 )
@@ -115,10 +116,10 @@ func (l *Live) GetInfo() (*live.Info, error) {
 	}
 	isLive := item.Get("isLive").Bool()
 	status := item.Get("status").String()
-	// 仅 public 视为可录；isLive 但非 public（如 groupShow/privateShow 群秀/私密秀）
-	// 公开观众拿不到画面流，记录原因便于排查（避免误以为程序坏了）。
+	// 仅 public 视为可录；isLive 但非 public（群秀/私密/购票 ticket 等）公开观众拿不到画面流。
+	// 提到 Info 级，让用户能看到是购票/私密导致暂不录制，而非误以为程序故障。
 	if isLive && status != "public" {
-		l.GetLogger().Debugf("房间在播但非公开(status=%s)，公开观众无画面，暂不录制", status)
+		l.GetLogger().Infof("房间在播但非公开(status=%s，如群秀/私密/购票)，公开观众无画面，暂不录制", status)
 	}
 	return &live.Info{
 		Live:      l,
@@ -156,13 +157,21 @@ func (l *Live) GetStreamInfos() ([]*live.StreamUrlInfo, error) {
 	}
 	srcBitrate := int(settings.Get("video.bitrate").Int() / 1000)
 
-	// 内置 WebRTC 引擎基于 H264：遇到 H265/HEVC 或非 webrtc 推流(如 rtmp)的房间无法建连录制。
-	// 给出可操作提示——这类房间需改用浏览器引擎(recording_engine: browser，由站点播放器解码)。
+	// 仅当用户实际使用内置 webrtc 引擎时，遇到 H265/HEVC 或非 webrtc 推流(如 rtmp)才提示无法录制。
+	// 默认的 hls 引擎(hlsmouflon)与 browser 引擎都能录这类房间，不应误导。
 	mediaTransport := settings.Get("mediaTransport").String()
 	lc := strings.ToLower(codec)
 	if (mediaTransport != "" && mediaTransport != "webrtc") || lc == "h265" || lc == "hevc" {
-		l.GetLogger().Warnf("房间为 %s 推流、编码 %s：内置 WebRTC 引擎(仅支持 H264)无法录制，请将该房间改用浏览器引擎(recording_engine: browser)",
-			mediaTransport, codec)
+		engine := "hls"
+		if c := configs.GetCurrentConfig(); c != nil {
+			engine = c.Feature.GetEffectiveRecordingEngine()
+		}
+		if engine == "webrtc" {
+			l.GetLogger().Warnf("房间为 %s 推流、编码 %s：内置 WebRTC 引擎(仅支持 H264)无法录制，请改用默认 hls 引擎或 browser 引擎",
+				mediaTransport, codec)
+		} else {
+			l.GetLogger().Debugf("房间为 %s 推流、编码 %s（当前 %s 引擎可正常录制）", mediaTransport, codec, engine)
+		}
 	}
 
 	headers := map[string]string{

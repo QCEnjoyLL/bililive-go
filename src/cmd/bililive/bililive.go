@@ -304,9 +304,14 @@ func main() {
 		if instanceID == "" {
 			instanceID = "default"
 		}
+		var ghToken string
+		if c := configs.GetCurrentConfig(); c != nil {
+			ghToken = c.Update.GithubToken
+		}
 		updateManager = update.NewManager(update.ManagerConfig{
 			CurrentVersion: consts.AppVersion,
 			InstanceID:     instanceID,
+			GithubToken:    ghToken,
 		})
 		if err := updateManager.ConnectToLauncher(rootCtx); err != nil {
 			logger.WithError(err).Warn("连接到启动器失败，自动更新功能将不可用")

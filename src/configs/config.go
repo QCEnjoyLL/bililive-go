@@ -359,6 +359,9 @@ type VideoSplitStrategies struct {
 	OnRoomNameChanged bool          `yaml:"on_room_name_changed" json:"on_room_name_changed"`
 	MaxDuration       time.Duration `yaml:"max_duration" json:"max_duration"`
 	MaxFileSize       ByteSize      `yaml:"max_file_size" json:"max_file_size"`
+	// MaxRecordDuration 定时录制：单次录制会话达到此墙钟时长后，停止该房间录制并停止监听、
+	// 不再自动重录（区别于 MaxDuration 的分段续录）。0=不限制。从开始录制起算。
+	MaxRecordDuration time.Duration `yaml:"max_record_duration" json:"max_record_duration"`
 }
 
 // UploadTiming 上传时机
@@ -487,6 +490,9 @@ type UpdateConfig struct {
 	AutoCheck bool `yaml:"auto_check" json:"auto_check"`
 	// CheckIntervalHours 检查更新间隔（小时，默认 6）
 	CheckIntervalHours int `yaml:"check_interval_hours" json:"check_interval_hours"`
+	// GithubToken 私有 fork 仓库的 GitHub Personal Access Token（fine-grained，只读 Contents 即可）。
+	// 留空则匿名访问（仅 public 仓库可检测/下载）；私有仓库必须填，否则更新检测/下载会 403/404。
+	GithubToken string `yaml:"github_token,omitempty" json:"github_token,omitempty"`
 	// AutoDownload 是否自动下载更新（默认 true）
 	// false 时仅检查并通知，需用户手动触发下载
 	AutoDownload bool `yaml:"auto_download" json:"auto_download"`
