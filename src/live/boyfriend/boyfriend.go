@@ -1,9 +1,9 @@
 // Package boyfriend 支持 zh.boyfriend.show（StripChat 白标平台）的直播录制。
 //
-// 该平台的视频通过 WebRTC（doppiocdn / Flashphoner-WCS 风格信令）分发，
-// 其 HLS 接口对匿名/登录用户均返回无法解码的 "URI 混淆" 分段，连官方播放器
-// 自身也不解码该格式而是走 WebRTC。因此本平台的 GetStreamInfos 返回
-// webrtc:// 伪 URL，由 webrtcrec parser 负责实际拉流录制（见 pkg/parser/webrtcrec）。
+// 该平台视频通过 WebRTC 分发，同时提供 HLS 接口（分段地址被 MOUFLON 混淆）。
+// GetStreamInfos 返回 webrtc:// 伪 URL；录制引擎**默认 hls**（hlsmouflon：逆向
+// MOUFLON 解码后纯 HTTP 直录，无损 / 无花屏 / 轻量、无需浏览器），也可按房间切换
+// browser / webrtc 引擎（见 recorders.newParser 与 pkg/parser/hlsmouflon）。
 package boyfriend
 
 import (

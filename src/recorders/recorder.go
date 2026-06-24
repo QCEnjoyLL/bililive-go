@@ -33,10 +33,10 @@ import (
 	"github.com/bililive-go/bililive-go/src/pkg/livelogger"
 	"github.com/bililive-go/bililive-go/src/pkg/parser"
 	"github.com/bililive-go/bililive-go/src/pkg/parser/bililive_recorder"
-	"github.com/bililive-go/bililive-go/src/pkg/parser/ffmpeg"
-	"github.com/bililive-go/bililive-go/src/pkg/parser/native/flv"
 	"github.com/bililive-go/bililive-go/src/pkg/parser/browserrec"
+	"github.com/bililive-go/bililive-go/src/pkg/parser/ffmpeg"
 	"github.com/bililive-go/bililive-go/src/pkg/parser/hlsmouflon"
+	"github.com/bililive-go/bililive-go/src/pkg/parser/native/flv"
 	"github.com/bililive-go/bililive-go/src/pkg/parser/webrtcrec"
 	bilisentry "github.com/bililive-go/bililive-go/src/pkg/sentry"
 	"github.com/bililive-go/bililive-go/src/pkg/streamprobe"
@@ -436,6 +436,9 @@ func (r *recorder) tryRecord(ctx context.Context) {
 		"audio_only":        strconv.FormatBool(info.AudioOnly),
 		"recording_engine":  resolvedConfig.Feature.GetEffectiveRecordingEngine(),
 		"recording_quality": resolvedConfig.Feature.RecordingQuality,
+		// hls 引擎的 MOUFLON 解码覆盖（留空则用内置默认/自愈缓存值）
+		"hls_keystream": resolvedConfig.Feature.HlsKeystream,
+		"hls_pkey":      resolvedConfig.Feature.HlsPkey,
 	}
 	// 使用层级配置的下载器类型
 	downloaderType := resolvedConfig.Feature.GetEffectiveDownloaderType()

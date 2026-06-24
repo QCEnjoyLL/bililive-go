@@ -10,6 +10,14 @@
 //	realHash = XOR( base64decode(reverse(encHash)), keystream )
 //
 // keystream = sha256(pdkey)[:16]，对固定 pkey 全局恒定，可硬编码（失效时支持配置覆盖）。
+//
+// 维护与自愈：MOUFLON 是混淆而非真加密，keystream 全局恒定故硬编码默认值。站点一旦轮换密钥，
+// 表现为所有房间启动 startupTO 内取不到有效分段（能连上播放列表但 decFail>0）。此时
+// ParseLiveStream 自动调 bootstrapKeystream（见 bootstrap.go）：启一次无头浏览器播该房间，
+// 截获浏览器请求的真实分段地址，与播放列表的加密地址按 msn 配对反推出新 keystream，缓存到
+// AppDataPath/hls_keystream.txt 后继续录制；引导有 5 分钟防抖。若站点改的是算法（非仅密钥），
+// 自愈也会失败 —— 退回 browser 引擎，并参考 yt-dlp / StreaMonitor 的 stripchat 实现跟进。
+// 手动救急：配置 feature.hls_keystream（hex）/ hls_pkey 直接覆盖。
 package hlsmouflon
 
 import (
@@ -21,11 +29,13 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/bililive-go/bililive-go/src/configs"
 	"github.com/bililive-go/bililive-go/src/live"
 	"github.com/bililive-go/bililive-go/src/pkg/livelogger"
 	"github.com/bililive-go/bililive-go/src/pkg/parser"
@@ -62,9 +72,13 @@ func (b *builder) Build(cfg map[string]string, logger *livelogger.LiveLogger) (p
 	if v := cfg["hls_pkey"]; v != "" {
 		pkey = v
 	}
-	ksHex := defaultKeystreamHex
-	if v := cfg["hls_keystream"]; v != "" {
-		ksHex = v
+	// keystream 读取优先级：显式配置 > 自愈引导缓存 > 硬编码默认
+	ksHex := cfg["hls_keystream"]
+	if ksHex == "" {
+		ksHex = loadKeystreamCache()
+	}
+	if ksHex == "" {
+		ksHex = defaultKeystreamHex
 	}
 	ks, err := hex.DecodeString(ksHex)
 	if err != nil || len(ks) == 0 {
@@ -112,14 +126,7 @@ func (p *Parser) ParseLiveStream(ctx context.Context, streamUrlInfo *live.Stream
 	if err != nil {
 		return fmt.Errorf("hlsmouflon: 拉取 master 失败（可能未开播）: %w", err)
 	}
-	variant := ""
-	for _, l := range strings.Split(string(mbody), "\n") {
-		l = strings.TrimSpace(l)
-		if strings.HasPrefix(l, "https") {
-			variant = l
-			break
-		}
-	}
+	variant := firstHTTPSLine(mbody)
 	if variant == "" {
 		return fmt.Errorf("hlsmouflon: master 中找不到变体地址")
 	}
@@ -156,6 +163,7 @@ func (p *Parser) ParseLiveStream(ctx context.Context, streamUrlInfo *live.Stream
 	started := false
 	start := time.Now()
 	var decFail int
+	triedBootstrap := false
 
 	for {
 		select {
@@ -209,9 +217,22 @@ func (p *Parser) ParseLiveStream(ctx context.Context, streamUrlInfo *live.Stream
 			}
 		}
 
-		// 启动期一直失败 → 密钥失效/未开播
+		// 启动期一直失败：若能连上播放列表却解不出分段(decFail>0)，多半是 keystream 失效，
+		// 用无头浏览器引导一次新密钥并继续；纯未开播(decFail==0)或引导失败则返回。
 		if !started && time.Since(start) > startupTO {
-			return fmt.Errorf("hlsmouflon: %s 启动 %s 内未取到有效分段（未开播或 MOUFLON 密钥已轮换，可用 hls_keystream 覆盖）", modelID, startupTO)
+			if decFail > 0 && !triedBootstrap {
+				triedBootstrap = true
+				if newKs, err := bootstrapKeystream(ctx, liveObj, modelID, p.pkey, p.logger); err == nil {
+					p.keystream = newKs
+					saveKeystreamCache(newKs, p.logger)
+					decFail, start, seen = 0, time.Now(), make(map[string]bool)
+					p.logger.Infof("hlsmouflon: 已应用引导出的新 keystream，继续录制 %s", modelID)
+					continue
+				} else {
+					p.logger.Warnf("hlsmouflon: keystream 引导失败: %v", err)
+				}
+			}
+			return fmt.Errorf("hlsmouflon: %s 启动 %s 内未取到有效分段（未开播，或 MOUFLON 密钥已轮换且自动引导失败；可手动配置 hls_keystream 覆盖）", modelID, startupTO)
 		}
 		// 已开录后长时间无新数据 → 下播
 		if started && time.Since(lastData) > mediaIdleTO {
@@ -263,11 +284,14 @@ func (p *Parser) writeSeg(b []byte) {
 	p.mu.Unlock()
 }
 
-func (p *Parser) get(url string) ([]byte, error) {
+func (p *Parser) get(url string) ([]byte, error) { return fetch(p.hc, url) }
+
+// fetch 带站点 UA/Referer 拉取 url，非 200 视为错误。包级以便引导逻辑(bootstrap.go)复用。
+func fetch(hc *http.Client, url string) ([]byte, error) {
 	req, _ := http.NewRequest("GET", url, nil)
 	req.Header.Set("User-Agent", defaultUA)
 	req.Header.Set("Referer", referer)
-	resp, err := p.hc.Do(req)
+	resp, err := hc.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -277,6 +301,50 @@ func (p *Parser) get(url string) ([]byte, error) {
 		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
 	return io.ReadAll(resp.Body)
+}
+
+// firstHTTPSLine 返回 m3u8 中第一条 https 开头的行（master 里即变体地址）。
+func firstHTTPSLine(body []byte) string {
+	for _, l := range strings.Split(string(body), "\n") {
+		if l = strings.TrimSpace(l); strings.HasPrefix(l, "https") {
+			return l
+		}
+	}
+	return ""
+}
+
+// keystream 自愈缓存：引导出的新 keystream 持久化到 app 数据目录，下次启动直接复用，
+// 免去再次引导。无法确定数据目录（如测试环境）则静默跳过，回退默认/配置值。
+func keystreamCachePath() string {
+	cfg := configs.GetCurrentConfig()
+	if cfg == nil || cfg.AppDataPath == "" {
+		return ""
+	}
+	return filepath.Join(cfg.AppDataPath, "hls_keystream.txt")
+}
+
+func loadKeystreamCache() string {
+	p := keystreamCachePath()
+	if p == "" {
+		return ""
+	}
+	b, err := os.ReadFile(p)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(b))
+}
+
+func saveKeystreamCache(ks []byte, logger *livelogger.LiveLogger) {
+	p := keystreamCachePath()
+	if p == "" {
+		return
+	}
+	if err := os.WriteFile(p, []byte(hex.EncodeToString(ks)), 0o644); err != nil {
+		logger.Warnf("hlsmouflon: 写 keystream 缓存失败: %v", err)
+		return
+	}
+	logger.Infof("hlsmouflon: 新 keystream 已缓存到 %s", p)
 }
 
 func (p *Parser) Stop() error {

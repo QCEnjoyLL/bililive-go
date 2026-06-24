@@ -16,7 +16,6 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
-	goruntime "runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -26,10 +25,10 @@ import (
 	"github.com/chromedp/chromedp"
 
 	"github.com/bililive-go/bililive-go/src/live"
+	"github.com/bililive-go/bililive-go/src/pkg/browser"
 	"github.com/bililive-go/bililive-go/src/pkg/livelogger"
 	"github.com/bililive-go/bililive-go/src/pkg/parser"
 	"github.com/bililive-go/bililive-go/src/pkg/utils"
-	"github.com/bililive-go/bililive-go/src/tools"
 )
 
 const (
@@ -105,63 +104,8 @@ func (b *builder) Build(cfg map[string]string, logger *livelogger.LiveLogger) (p
 	}, nil
 }
 
-// resolveBrowserPath 解析浏览器可执行文件路径，优先级：
-//  1. 显式指定 (cfg browser_path)
-//  2. 已下载的内置 Chromium
-//  3. 系统 Chrome/Edge（返回 "" 交给 chromedp 自动探测，避免无谓下载 150MB）
-//  4. 都没有 → 现下载内置 Chromium（仅首次）
-func (p *Parser) resolveBrowserPath() string {
-	if p.browserPath != "" {
-		return p.browserPath
-	}
-	if path := downloadedChromium(); path != "" {
-		return path
-	}
-	if findSystemBrowser() != "" {
-		return "" // 有系统浏览器，交给 chromedp 自动探测同一个
-	}
-	p.logger.Infof("browserrec: 未检测到 Chrome/Edge，开始下载内置 Chromium（约 150MB，仅首次）…")
-	if err := tools.DownloadIfNecessary("chromium"); err != nil {
-		p.logger.Warnf("browserrec: 下载内置 Chromium 失败: %v", err)
-		return ""
-	}
-	return downloadedChromium()
-}
-
-// downloadedChromium 返回已下载的内置 Chromium 路径（不存在则 ""）。
-func downloadedChromium() string {
-	api := tools.Get()
-	if api == nil {
-		return ""
-	}
-	t, err := api.GetTool("chromium")
-	if err != nil || !t.DoesToolExist() {
-		return ""
-	}
-	return t.GetToolPath()
-}
-
-// findSystemBrowser 探测系统已安装的 Chrome/Edge/Chromium（找到返回其路径）。
-func findSystemBrowser() string {
-	for _, n := range []string{"google-chrome", "google-chrome-stable", "chromium", "chromium-browser", "chrome", "microsoft-edge", "msedge"} {
-		if pth, err := exec.LookPath(n); err == nil {
-			return pth
-		}
-	}
-	if goruntime.GOOS == "windows" {
-		for _, pth := range []string{
-			`C:\Program Files\Google\Chrome\Application\chrome.exe`,
-			`C:\Program Files (x86)\Google\Chrome\Application\chrome.exe`,
-			`C:\Program Files\Microsoft\Edge\Application\msedge.exe`,
-			`C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe`,
-		} {
-			if _, err := os.Stat(pth); err == nil {
-				return pth
-			}
-		}
-	}
-	return ""
-}
+// 浏览器定位逻辑（ResolveExecPath/DownloadedChromium/FindSystem）已抽到 src/pkg/browser 包，
+// 与 hlsmouflon 的 keystream 自愈引导共用。
 
 // qualityLabel 返回用于日志的画质档位名（空/source/1080p 等）。
 func qualityLabel(q string) string {
@@ -226,7 +170,7 @@ func (p *Parser) ParseLiveStream(ctx context.Context, _ *live.StreamUrlInfo, liv
 		chromedp.Flag("mute-audio", false),
 		chromedp.WindowSize(p.winW, p.winH),
 	)
-	if execPath := p.resolveBrowserPath(); execPath != "" {
+	if execPath := browser.ResolveExecPath(p.browserPath, p.logger); execPath != "" {
 		opts = append(opts, chromedp.ExecPath(execPath))
 	}
 	allocCtx, cancelAlloc := chromedp.NewExecAllocator(context.Background(), opts...)
