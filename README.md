@@ -4,25 +4,6 @@
 
 Bililive-go是一个支持多种直播平台的直播录制工具   
 
-> 本仓库在上游 [bililive-go](https://github.com/bililive-go/bililive-go) 基础上，新增了 **BoyFriend（zh.boyfriend.show）** 平台的录制支持。该站经 WebRTC/HLS 分发、并用 MOUFLON 混淆分段地址，本项目提供三种录制引擎（默认 **hls**，无损 / 无花屏 / 轻量），支持开播检测、清晰度选择与 Cookie。
-
-<details>
-<summary><b>BoyFriend 录制引擎与维护（点击展开）</b></summary>
-
-通过 `feature.recording_engine` 选择引擎：
-
-| 引擎 | 原理 | 取舍 |
-|------|------|------|
-| `hls`（默认） | 纯 HTTP 拉 LL-HLS，逆向 MOUFLON 解出真实分段，ffmpeg `-c copy` 封装 MKV | 无损、无花屏、无需浏览器，最轻量 |
-| `browser` | 无头浏览器解码后用 MediaRecorder 录制 | 画面干净，但吃 CPU、需系统 Chrome/Edge 或内置 Chromium |
-| `webrtc` | 进程内直转 WebRTC | 启动快，弱网丢包时可能少量花屏 |
-
-**HLS 引擎失效怎么办**：MOUFLON 的解码密钥（keystream）全局恒定、已内置。站点若轮换密钥，会表现为「所有房间都录不到」。此时程序会**自动自愈**——启一次无头浏览器播房间、反推出新密钥并缓存到 `<AppDataPath>/hls_keystream.txt`，随后恢复正常录制（有 5 分钟防抖）。自愈需要一个可用浏览器：系统 Chrome/Edge，或自动下载的内置 Chromium；**mac / ARM 无内置 Chromium，请先装系统 Chrome**。
-
-若连自愈也失败（站点改的是算法而非仅换密钥），可临时切 `recording_engine: browser` 兜底，或手动用 `feature.hls_keystream`（hex）/ `feature.hls_pkey` 覆盖；并可参考 yt-dlp / StreaMonitor 的 stripchat 实现跟进。
-
-</details>
-
 ### 第三方生态
 
 > 安全提示：Bililive-go 未审计任何第三方代码的安全性、合规性和可用性。是否安装或使用来自第三方的脚本、插件、扩展等内容，请自行判断并承担相应风险。
@@ -140,12 +121,6 @@ Bililive-go是一个支持多种直播平台的直播录制工具
         <td>SOOP</td>
         <td>play.sooplive.com</td>
         <td>✅ 支持</td>
-        <td>✅ 支持</td>
-    </tr>
-    <tr align="center">
-        <td>BoyFriend</td>
-        <td>zh.boyfriend.show</td>
-        <td>✅ 支持（WebRTC）</td>
         <td>✅ 支持</td>
     </tr>
 </table>

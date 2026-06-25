@@ -1,7 +1,7 @@
 {
   "name": "bililive-go",
   "version": "1.0.0",
-  "description": "支持多平台的直播录制工具（含 zh.boyfriend.show / HLS 直录）",
+  "description": "支持多平台的直播录制工具",
   "main": "index.js",
   "directories": {
     "doc": "docs",

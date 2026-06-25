@@ -63,8 +63,6 @@ type ManagerConfig struct {
 	// VersionAPIURL 自定义版本检测 API URL（留空使用默认值）
 	// 可设置为本地 HTTP 服务器地址用于测试自动升级逻辑
 	VersionAPIURL string
-	// GithubToken 私有 fork 仓库的 GitHub Token（留空则匿名）
-	GithubToken string
 }
 
 // NewManager 创建新的更新管理器
@@ -74,7 +72,6 @@ func NewManager(config ManagerConfig) *Manager {
 	}
 
 	checker := NewChecker(config.CurrentVersion)
-	checker.SetGithubToken(config.GithubToken)
 
 	// 版本检测 API 地址优先级：配置值 > 环境变量 > 默认值
 	if config.VersionAPIURL != "" {

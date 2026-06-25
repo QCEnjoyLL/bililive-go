@@ -175,11 +175,12 @@ node_modules
 external_tools/
 coverage.txt
 .local
+*.local.md
 
 # 录制输出与本地测试配置（不纳入版本库）
 /Videos/*
 !/Videos/.gitkeep
-/config-boyfriend.yml
+/config-*.yml
 *.mkv
 
 

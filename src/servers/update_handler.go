@@ -47,7 +47,6 @@ func getUpdateManager() *update.Manager {
 			CurrentVersion: consts.AppVersion,
 			AppDataPath:    cfg.AppDataPath,
 			InstanceID:     "",
-			GithubToken:    cfg.Update.GithubToken,
 		})
 
 		// 初始化自动更新器
