@@ -18,6 +18,8 @@ import (
 const (
 	// GitHubReleasesAPI GitHub Releases API 地址（指向本 fork 仓库）
 	GitHubReleasesAPI = "https://api.github.com/repos/QCEnjoyLL/bililive-go/releases"
+	// GitHubRepoURL 本 fork 的 GitHub 仓库地址。
+	GitHubRepoURL = "https://github.com/QCEnjoyLL/bililive-go"
 	// DefaultVersionAPIURL 默认的版本检测 API 地址
 	DefaultVersionAPIURL = "https://bililive-go.com/api/versions"
 )
@@ -90,7 +92,7 @@ func (c *Checker) SetVersionAPIURL(url string) {
 func (c *Checker) CheckForUpdate(includePrerelease bool) (*ReleaseInfo, error) {
 	releases, err := c.fetchReleases()
 	if err != nil {
-		return nil, err
+		return c.checkForUpdateViaReleaseRedirect(includePrerelease, err)
 	}
 
 	if len(releases) == 0 {
@@ -157,7 +159,7 @@ func (c *Checker) CheckForUpdate(includePrerelease bool) (*ReleaseInfo, error) {
 func (c *Checker) GetLatestRelease(includePrerelease bool) (*ReleaseInfo, error) {
 	releases, err := c.fetchReleases()
 	if err != nil {
-		return nil, err
+		return c.latestReleaseViaRedirect(includePrerelease, err)
 	}
 
 	if len(releases) == 0 {
@@ -241,6 +243,69 @@ func (c *Checker) fetchReleases() ([]githubRelease, error) {
 	return releases, nil
 }
 
+func (c *Checker) checkForUpdateViaReleaseRedirect(includePrerelease bool, apiErr error) (*ReleaseInfo, error) {
+	info, err := c.latestReleaseViaRedirect(includePrerelease, apiErr)
+	if err != nil || info == nil {
+		return info, err
+	}
+	isNewer, err := c.isNewerVersion(info.TagName)
+	if err != nil {
+		if info.TagName == c.currentVersion {
+			return nil, nil
+		}
+	} else if !isNewer {
+		return nil, nil
+	}
+	return info, nil
+}
+
+func (c *Checker) latestReleaseViaRedirect(includePrerelease bool, apiErr error) (*ReleaseInfo, error) {
+	if includePrerelease {
+		return nil, apiErr
+	}
+	tag, err := c.fetchLatestStableTagViaRedirect()
+	if err != nil {
+		return nil, fmt.Errorf("%v；备用路径也失败: %w", apiErr, err)
+	}
+	return c.releaseInfoFromTag(tag), nil
+}
+
+func (c *Checker) fetchLatestStableTagViaRedirect() (string, error) {
+	req, err := http.NewRequest("GET", GitHubRepoURL+"/releases/latest", nil)
+	if err != nil {
+		return "", fmt.Errorf("创建备用请求失败: %w", err)
+	}
+	req.Header.Set("User-Agent", "bililive-go-updater")
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("请求 GitHub Releases 备用地址失败: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return "", fmt.Errorf("GitHub Releases 备用地址返回状态码: %d", resp.StatusCode)
+	}
+	parts := strings.Split(strings.Trim(resp.Request.URL.Path, "/"), "/")
+	if len(parts) < 2 || parts[len(parts)-2] != "tag" || parts[len(parts)-1] == "" {
+		return "", fmt.Errorf("无法从备用地址解析最新版本: %s", resp.Request.URL.String())
+	}
+	return parts[len(parts)-1], nil
+}
+
+func (c *Checker) releaseInfoFromTag(tagName string) *ReleaseInfo {
+	assetName := c.getExpectedArchiveName()
+	directURL := fmt.Sprintf("%s/releases/download/%s/%s", GitHubRepoURL, tagName, assetName)
+	return &ReleaseInfo{
+		Version:      strings.TrimPrefix(tagName, "v"),
+		TagName:      tagName,
+		ReleaseDate:  time.Time{},
+		DownloadURLs: []string{directURL, GetProxyDownloadURL(directURL)},
+		Changelog:    "GitHub API 受限，已使用备用更新检查路径获取版本信息。详细更新日志请查看 GitHub Release 页面。",
+		Prerelease:   false,
+		AssetName:    assetName,
+		AssetSize:    0,
+	}
+}
+
 // isNewerVersion 检查指定版本是否比当前版本新
 func (c *Checker) isNewerVersion(tagName string) (bool, error) {
 	// 移除 'v' 前缀
@@ -268,6 +333,14 @@ func (c *Checker) getExpectedAssetName() string {
 	// 生成期望的文件名模式
 	// 例如: bililive-windows-amd64, bililive-linux-amd64
 	return fmt.Sprintf("bililive-%s-%s", os, arch)
+}
+
+func (c *Checker) getExpectedArchiveName() string {
+	name := c.getExpectedAssetName()
+	if runtime.GOOS == "windows" {
+		return name + ".zip"
+	}
+	return name + ".tar.gz"
 }
 
 // CompareVersions 比较两个版本号
