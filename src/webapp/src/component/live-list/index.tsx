@@ -499,15 +499,16 @@ class LiveList extends React.Component<Props, IState> {
                     this.props.navigate(`/fileList/${data.address}/${data.name}`);
                 }}>文件</Button>
                 <Divider type="vertical" />
-                <a
+                <Button
+                    type="link"
+                    size="small"
                     href={`/#/configInfo#rooms-live-${data.roomId}`}
                     target="_blank"
                     rel="noopener noreferrer"
                     onClick={(e) => e.stopPropagation()}
-                    style={{ fontSize: 12 }}
                 >
                     配置
-                </a>
+                </Button>
             </span>
         ),
     };

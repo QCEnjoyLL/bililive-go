@@ -20,6 +20,8 @@ const (
 	GitHubReleasesAPI = "https://api.github.com/repos/QCEnjoyLL/bililive-go/releases"
 	// GitHubRepoURL 本 fork 的 GitHub 仓库地址。
 	GitHubRepoURL = "https://github.com/QCEnjoyLL/bililive-go"
+	// GitHubRawURL 本 fork 的 raw 文件地址，用于在 GitHub API 拿不到 release body 时读取仓库内更新说明。
+	GitHubRawURL = "https://raw.githubusercontent.com/QCEnjoyLL/bililive-go"
 	// DefaultVersionAPIURL 默认的版本检测 API 地址
 	DefaultVersionAPIURL = "https://bililive-go.com/api/versions"
 )
@@ -62,6 +64,7 @@ type Checker struct {
 	httpClient     *http.Client
 	currentVersion string
 	releaseURL     string
+	rawBaseURL     string
 	versionAPIURL  string // 版本检测 API URL（可自定义测试）
 }
 
@@ -73,6 +76,7 @@ func NewChecker(currentVersion string) *Checker {
 		},
 		currentVersion: currentVersion,
 		releaseURL:     GitHubReleasesAPI,
+		rawBaseURL:     GitHubRawURL,
 		versionAPIURL:  DefaultVersionAPIURL,
 	}
 }
@@ -80,6 +84,11 @@ func NewChecker(currentVersion string) *Checker {
 // SetReleaseURL 设置自定义 Release API URL（用于测试或自托管）
 func (c *Checker) SetReleaseURL(url string) {
 	c.releaseURL = url
+}
+
+// SetRawBaseURL 设置自定义 raw 文件基础 URL（用于测试）。
+func (c *Checker) SetRawBaseURL(url string) {
+	c.rawBaseURL = url
 }
 
 // SetVersionAPIURL 设置自定义版本检测 API URL（用于测试本地自动升级逻辑）
@@ -148,7 +157,7 @@ func (c *Checker) CheckForUpdate(includePrerelease bool) (*ReleaseInfo, error) {
 		TagName:      latestRelease.TagName,
 		ReleaseDate:  latestRelease.PublishedAt,
 		DownloadURLs: []string{matchedAsset.BrowserDownloadURL},
-		Changelog:    normalizeChangelog(latestRelease.Body, latestRelease.TagName),
+		Changelog:    c.changelogForRelease(latestRelease.Body, latestRelease.TagName),
 		Prerelease:   latestRelease.Prerelease,
 		AssetName:    matchedAsset.Name,
 		AssetSize:    matchedAsset.Size,
@@ -204,7 +213,7 @@ func (c *Checker) GetLatestRelease(includePrerelease bool) (*ReleaseInfo, error)
 		TagName:      latestRelease.TagName,
 		ReleaseDate:  latestRelease.PublishedAt,
 		DownloadURLs: []string{matchedAsset.BrowserDownloadURL},
-		Changelog:    normalizeChangelog(latestRelease.Body, latestRelease.TagName),
+		Changelog:    c.changelogForRelease(latestRelease.Body, latestRelease.TagName),
 		Prerelease:   latestRelease.Prerelease,
 		AssetName:    matchedAsset.Name,
 		AssetSize:    matchedAsset.Size,
@@ -299,7 +308,7 @@ func (c *Checker) releaseInfoFromTag(tagName string) *ReleaseInfo {
 		TagName:      tagName,
 		ReleaseDate:  time.Time{},
 		DownloadURLs: []string{directURL, GetProxyDownloadURL(directURL)},
-		Changelog:    fallbackChangelog(tagName),
+		Changelog:    c.changelogForRelease("", tagName),
 		Prerelease:   false,
 		AssetName:    assetName,
 		AssetSize:    0,
@@ -311,6 +320,46 @@ func normalizeChangelog(body, tagName string) string {
 		return body
 	}
 	return fallbackChangelog(tagName)
+}
+
+func (c *Checker) changelogForRelease(body, tagName string) string {
+	if strings.TrimSpace(body) != "" {
+		return body
+	}
+	if notes, err := c.fetchReleaseNotesFromRepository(tagName); err == nil && strings.TrimSpace(notes) != "" {
+		return notes
+	}
+	return fallbackChangelog(tagName)
+}
+
+func (c *Checker) fetchReleaseNotesFromRepository(tagName string) (string, error) {
+	if c.rawBaseURL == "" || tagName == "" {
+		return "", fmt.Errorf("raw base URL 或 tag 为空")
+	}
+	notesURL := fmt.Sprintf("%s/%s/docs/releases/%s.md",
+		strings.TrimRight(c.rawBaseURL, "/"),
+		url.PathEscape(tagName),
+		url.PathEscape(tagName),
+	)
+	req, err := http.NewRequest("GET", notesURL, nil)
+	if err != nil {
+		return "", fmt.Errorf("创建更新说明请求失败: %w", err)
+	}
+	req.Header.Set("User-Agent", "bililive-go-updater")
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("请求更新说明失败: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		io.Copy(io.Discard, resp.Body)
+		return "", fmt.Errorf("更新说明返回状态码: %d", resp.StatusCode)
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 256*1024))
+	if err != nil {
+		return "", fmt.Errorf("读取更新说明失败: %w", err)
+	}
+	return strings.TrimSpace(string(body)), nil
 }
 
 func fallbackChangelog(tagName string) string {

@@ -1,12 +1,15 @@
 package update
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
 
 func TestReleaseInfoFromTagBuildsFallbackDownloadURL(t *testing.T) {
 	c := NewChecker("v1.1.1")
+	c.SetRawBaseURL("")
 
 	info := c.releaseInfoFromTag("v1.1.2")
 
@@ -43,5 +46,33 @@ func TestNormalizeChangelogUsesChineseFallback(t *testing.T) {
 	body := "custom release note"
 	if normalizeChangelog(body, "v1.1.6") != body {
 		t.Fatalf("非空更新说明不应被覆盖")
+	}
+}
+
+func TestChangelogForReleaseReadsRepositoryNotesWhenBodyEmpty(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1.1.11/docs/releases/v1.1.11.md" {
+			t.Fatalf("更新说明请求路径错误: %s", r.URL.Path)
+		}
+		_, _ = w.Write([]byte("## v1.1.11\n\n- 中文更新说明"))
+	}))
+	defer server.Close()
+
+	c := NewChecker("v1.1.10")
+	c.SetRawBaseURL(server.URL)
+
+	got := c.changelogForRelease("", "v1.1.11")
+	if !strings.Contains(got, "中文更新说明") {
+		t.Fatalf("未读取仓库更新说明: %q", got)
+	}
+}
+
+func TestChangelogForReleasePrefersReleaseBody(t *testing.T) {
+	c := NewChecker("v1.1.10")
+	c.SetRawBaseURL("")
+
+	got := c.changelogForRelease("GitHub Release 正文", "v1.1.11")
+	if got != "GitHub Release 正文" {
+		t.Fatalf("非空 release body 不应被覆盖: %q", got)
 	}
 }

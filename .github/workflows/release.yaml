@@ -123,10 +123,22 @@ jobs:
           echo "tar.gz: $(find dist -name '*.tar.gz' | wc -l) 个"
           echo "zip: $(find dist -name '*.zip' | wc -l) 个"
           echo "7z: $(find dist -name '*.7z' | wc -l) 个"
+      - name: Prepare Chinese release notes
+        run: |
+          NOTES_FILE="docs/releases/${GIT_TAG}.md"
+          if [ ! -f "$NOTES_FILE" ]; then
+            echo "::error::缺少中文更新说明文件: ${NOTES_FILE}"
+            echo "::error::请先编写 ${NOTES_FILE}，再发布 ${GIT_TAG}"
+            exit 1
+          fi
+          echo "RELEASE_NOTES_FILE=${NOTES_FILE}" >> "$GITHUB_ENV"
+          echo "=== ${GIT_TAG} 更新说明 ==="
+          cat "$NOTES_FILE"
       - name: Publish GitHub Release with all packaged files
         if: ${{ env.IS_DRY_RUN != 'true' }}
         uses: softprops/action-gh-release@v1
         with:
+          body_path: ${{ env.RELEASE_NOTES_FILE }}
           files: |
             dist/**/*.tar.gz
             dist/**/*.zip
@@ -314,4 +326,3 @@ jobs:
 
       - name: Inspect final image
         run: docker buildx imagetools inspect "${{ secrets.DOCKER_USERNAME }}/bililive-go:$GIT_TAG"
-
