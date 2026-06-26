@@ -148,7 +148,7 @@ func (c *Checker) CheckForUpdate(includePrerelease bool) (*ReleaseInfo, error) {
 		TagName:      latestRelease.TagName,
 		ReleaseDate:  latestRelease.PublishedAt,
 		DownloadURLs: []string{matchedAsset.BrowserDownloadURL},
-		Changelog:    latestRelease.Body,
+		Changelog:    normalizeChangelog(latestRelease.Body, latestRelease.TagName),
 		Prerelease:   latestRelease.Prerelease,
 		AssetName:    matchedAsset.Name,
 		AssetSize:    matchedAsset.Size,
@@ -204,7 +204,7 @@ func (c *Checker) GetLatestRelease(includePrerelease bool) (*ReleaseInfo, error)
 		TagName:      latestRelease.TagName,
 		ReleaseDate:  latestRelease.PublishedAt,
 		DownloadURLs: []string{matchedAsset.BrowserDownloadURL},
-		Changelog:    latestRelease.Body,
+		Changelog:    normalizeChangelog(latestRelease.Body, latestRelease.TagName),
 		Prerelease:   latestRelease.Prerelease,
 		AssetName:    matchedAsset.Name,
 		AssetSize:    matchedAsset.Size,
@@ -299,11 +299,22 @@ func (c *Checker) releaseInfoFromTag(tagName string) *ReleaseInfo {
 		TagName:      tagName,
 		ReleaseDate:  time.Time{},
 		DownloadURLs: []string{directURL, GetProxyDownloadURL(directURL)},
-		Changelog:    "GitHub API 受限，已使用备用更新检查路径获取版本信息。详细更新日志请查看 GitHub Release 页面。",
+		Changelog:    fallbackChangelog(tagName),
 		Prerelease:   false,
 		AssetName:    assetName,
 		AssetSize:    0,
 	}
+}
+
+func normalizeChangelog(body, tagName string) string {
+	if strings.TrimSpace(body) != "" {
+		return body
+	}
+	return fallbackChangelog(tagName)
+}
+
+func fallbackChangelog(tagName string) string {
+	return fmt.Sprintf("版本 %s 更新说明：\n- 修复已知问题，提升程序稳定性。\n- 优化录制、更新或页面显示相关体验。\n- 建议更新到此版本以获得最新修复。", tagName)
 }
 
 // isNewerVersion 检查指定版本是否比当前版本新

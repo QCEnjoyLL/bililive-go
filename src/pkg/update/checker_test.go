@@ -26,4 +26,22 @@ func TestReleaseInfoFromTagBuildsFallbackDownloadURL(t *testing.T) {
 	if !strings.Contains(info.DownloadURLs[1], "remotetools/download") {
 		t.Fatalf("备用中转下载链接错误: %q", info.DownloadURLs[1])
 	}
+	if !strings.Contains(info.Changelog, "版本 v1.1.2 更新说明") {
+		t.Fatalf("备用更新说明不是中文默认说明: %q", info.Changelog)
+	}
+}
+
+func TestNormalizeChangelogUsesChineseFallback(t *testing.T) {
+	got := normalizeChangelog("  ", "v1.1.6")
+	if !strings.Contains(got, "版本 v1.1.6 更新说明") {
+		t.Fatalf("空更新说明未生成中文 fallback: %q", got)
+	}
+	if !strings.Contains(got, "建议更新到此版本") {
+		t.Fatalf("中文 fallback 内容不完整: %q", got)
+	}
+
+	body := "custom release note"
+	if normalizeChangelog(body, "v1.1.6") != body {
+		t.Fatalf("非空更新说明不应被覆盖")
+	}
 }

@@ -387,6 +387,22 @@ const UpdatePage: React.FC = () => {
     return !!date && !date.startsWith('0001-01-01');
   };
 
+  const formatReleaseDate = (date?: string) => {
+    if (!hasValidReleaseDate(date)) return '';
+    const parsed = new Date(date as string);
+    if (Number.isNaN(parsed.getTime())) return date as string;
+    return `${new Intl.DateTimeFormat('zh-CN', {
+      timeZone: 'Asia/Shanghai',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false,
+    }).format(parsed).replace(/\//g, '-')} 北京时间`;
+  };
+
   const hasValidAssetSize = (size?: number) => {
     return typeof size === 'number' && size > 0;
   };
@@ -599,7 +615,7 @@ const UpdatePage: React.FC = () => {
         >
           <Space direction="vertical" style={{ width: '100%' }} size="middle">
             {hasValidReleaseDate(updateInfo?.release_date) && (
-              <Text type="secondary">发布日期: {updateInfo?.release_date}</Text>
+              <Text type="secondary">发布日期: {formatReleaseDate(updateInfo?.release_date)}</Text>
             )}
 
             {updateInfo?.changelog && (
