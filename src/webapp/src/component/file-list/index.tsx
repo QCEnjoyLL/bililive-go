@@ -802,16 +802,6 @@ const FileList: React.FC = () => {
         return videoExtensions.some(ext => lower.endsWith(ext));
     };
 
-    const preferPlayableSibling = (record: CurrentFolderFile): CurrentFolderFile => {
-        const lower = record.name.toLowerCase();
-        if (!lower.endsWith('.mkv')) return record;
-        const base = record.name.slice(0, -4).toLowerCase();
-        const mp4 = currentFolderFiles.find(f =>
-            !f.is_folder && f.name.toLowerCase() === `${base}.mp4`
-        );
-        return mp4 || record;
-    };
-
     const handleBatchBurn = () => {
         if (selectedRowKeys.length === 0 || batchBurning) return;
 
@@ -901,13 +891,9 @@ const FileList: React.FC = () => {
             // 仅在跳转时进行编码
             navigate("/fileList/" + encodePathForNav(fullPath));
         } else {
-            const playRecord = preferPlayableSibling(record);
-            if (playRecord !== record) {
-                fullPath = pathParam ? `${pathParam}/${playRecord.name}` : playRecord.name;
-            }
-            setCurrentPlayingName(playRecord.name);
+            setCurrentPlayingName(record.name);
             setIsPlayerVisible(true);
-            currentPlayingRef.current = { record: playRecord, fullPath };
+            currentPlayingRef.current = { record, fullPath };
             playerInitRef.current = true;
             // 使用 setTimeout 确保 DOM 已更新
             setTimeout(() => {

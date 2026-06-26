@@ -94,27 +94,6 @@ var (
 // videoExtensions 用于匹配弹幕文件对应的视频文件
 var videoExtensions = []string{".flv", ".mkv", ".ts", ".mp4"}
 
-func ensurePlayableWebRTCMP4Stage(cfg *pipeline.PipelineConfig, streamFormat string, outputFiles []string) *pipeline.PipelineConfig {
-	if strings.ToLower(streamFormat) != "webrtc" || !containsVideoExt(outputFiles, ".mkv") {
-		return cfg
-	}
-	if cfg == nil {
-		cfg = &pipeline.PipelineConfig{}
-	}
-	for _, stage := range cfg.Stages {
-		if stage.Name == pipeline.StageNameConvertMp4 && stage.IsEnabled() {
-			return cfg
-		}
-	}
-	cfg.Stages = append([]pipeline.StageConfig{{
-		Name: pipeline.StageNameConvertMp4,
-		Options: map[string]any{
-			pipeline.OptionDeleteSource: false,
-		},
-	}}, cfg.Stages...)
-	return cfg
-}
-
 func containsVideoExt(paths []string, ext string) bool {
 	for _, path := range paths {
 		if strings.EqualFold(filepath.Ext(path), ext) {
@@ -786,7 +765,6 @@ func (r *recorder) tryRecord(ctx context.Context) {
 
 		// 将旧配置转换为 Pipeline 配置
 		pipelineConfig := pipeline.GetEffectivePipelineConfig(&resolvedConfig.OnRecordFinished)
-		pipelineConfig = ensurePlayableWebRTCMP4Stage(pipelineConfig, streamInfo.Format, outputFiles)
 
 		// 如果没有配置任何处理阶段，跳过
 		if len(pipelineConfig.Stages) == 0 {
