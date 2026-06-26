@@ -69,6 +69,23 @@ func TestParseMouflonSegments(t *testing.T) {
 	}
 }
 
+func TestBuildMouflonPlaylistURLPreservesQueryAndTargetsMSN(t *testing.T) {
+	got := buildMouflonPlaylistURL("https://edge.example/live/room.m3u8?foo=bar", "key value", 123)
+	if !strings.HasPrefix(got, "https://edge.example/live/room.m3u8?") {
+		t.Fatalf("playlist URL 路径错误: %s", got)
+	}
+	for _, want := range []string{"foo=bar", "psch=v2", "pkey=key+value", "_HLS_msn=123"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("playlist URL 缺少参数 %q: %s", want, got)
+		}
+	}
+
+	got = buildMouflonPlaylistURL("https://edge.example/live/room.m3u8?_HLS_msn=10", "key", 0)
+	if strings.Contains(got, "_HLS_msn=") {
+		t.Fatalf("普通 playlist URL 不应保留旧 _HLS_msn: %s", got)
+	}
+}
+
 func TestSegmentSchedulerRetriesFailedDownload(t *testing.T) {
 	restore := tuneSchedulerForTest()
 	defer restore()
@@ -116,6 +133,59 @@ func TestSegmentSchedulerWritesInOrderWhenDownloadsFinishOutOfOrder(t *testing.T
 	got := waitWritable(t, s, 2)
 	if string(got[0].body) != "seg1" || string(got[1].body) != "seg2" {
 		t.Fatalf("写入顺序错误: %q, %q", string(got[0].body), string(got[1].body))
+	}
+}
+
+func TestSegmentSchedulerNextRequestMSNTargetsMissingGap(t *testing.T) {
+	restore := tuneSchedulerForTest()
+	defer restore()
+
+	s := newHLSSegmentScheduler(context.Background(), func(url string) ([]byte, error) {
+		return []byte(url), nil
+	})
+	defer s.stop()
+
+	s.add([]hlsSegmentRef{{key: hlsSegmentKey{msn: 1}, url: "seg1"}})
+	got := waitWritable(t, s, 1)
+	if string(got[0].body) != "seg1" {
+		t.Fatalf("第一个分段写入错误: %q", string(got[0].body))
+	}
+	if msn := s.nextRequestMSN(); msn != 2 {
+		t.Fatalf("已写到 1 后应请求 2: got=%d", msn)
+	}
+
+	s.add([]hlsSegmentRef{{key: hlsSegmentKey{msn: 3}, url: "seg3"}})
+	if msn := s.nextRequestMSN(); msn != 2 {
+		t.Fatalf("发现 3 但缺 2 时应优先请求缺口: got=%d", msn)
+	}
+
+	s.add([]hlsSegmentRef{{key: hlsSegmentKey{msn: 2}, url: "seg2"}})
+	if msn := s.nextRequestMSN(); msn != 4 {
+		t.Fatalf("缺口已进入队列后应请求最新后继: got=%d", msn)
+	}
+}
+
+func TestSegmentSchedulerTracksSuspectedMissedPlaylistWindow(t *testing.T) {
+	restore := tuneSchedulerForTest()
+	defer restore()
+
+	s := newHLSSegmentScheduler(context.Background(), func(url string) ([]byte, error) {
+		return []byte(url), nil
+	})
+	defer s.stop()
+
+	s.add([]hlsSegmentRef{
+		{key: hlsSegmentKey{msn: 1}, url: "seg1"},
+		{key: hlsSegmentKey{msn: 2}, url: "seg2"},
+	})
+	s.add([]hlsSegmentRef{{key: hlsSegmentKey{msn: 5}, url: "seg5"}})
+	st := s.snapshot(false)
+	if st.suspectedMissed != 2 {
+		t.Fatalf("疑似漏看统计错误: %+v", st)
+	}
+	_ = s.snapshot(true)
+	if st = s.snapshot(false); st.suspectedMissed != 0 {
+		t.Fatalf("周期疑似漏看统计应被重置: %+v", st)
 	}
 }
 

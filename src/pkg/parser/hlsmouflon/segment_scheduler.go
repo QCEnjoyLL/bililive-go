@@ -47,6 +47,7 @@ type hlsWritableSegment struct {
 type hlsSegmentStats struct {
 	written          int
 	gaps             int
+	suspectedMissed  int
 	discovered       int
 	downloadFailures int
 	retrySuccess     int
@@ -224,6 +225,30 @@ func (s *hlsSegmentScheduler) reset() {
 	s.stats = hlsSegmentStats{}
 }
 
+func (s *hlsSegmentScheduler) nextRequestMSN() int {
+	s.collectResults()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if !s.hasLast {
+		if s.stats.lastSeenMSN > 0 {
+			return s.stats.lastSeenMSN + 1
+		}
+		return 0
+	}
+	expected := s.lastWritten.msn + 1
+	if expected <= 0 {
+		return 0
+	}
+	if !s.hasMSNLocked(expected) {
+		return expected
+	}
+	if s.stats.lastSeenMSN >= expected {
+		return s.stats.lastSeenMSN + 1
+	}
+	return expected
+}
+
 func (s *hlsSegmentScheduler) add(segs []hlsSegmentRef) {
 	s.collectResults()
 	s.mu.Lock()
@@ -257,6 +282,7 @@ func (s *hlsSegmentScheduler) updatePlaylistWindowLocked(segs []hlsSegmentRef) {
 		s.stats.windowMaxMSN = 0
 		return
 	}
+	prevLastSeen := s.stats.lastSeenMSN
 	minMSN, maxMSN := segs[0].key.msn, segs[0].key.msn
 	for _, seg := range segs[1:] {
 		if seg.key.msn < minMSN {
@@ -268,6 +294,9 @@ func (s *hlsSegmentScheduler) updatePlaylistWindowLocked(segs []hlsSegmentRef) {
 	}
 	s.stats.windowMinMSN = minMSN
 	s.stats.windowMaxMSN = maxMSN
+	if prevLastSeen > 0 && minMSN > prevLastSeen+1 {
+		s.stats.suspectedMissed += minMSN - prevLastSeen - 1
+	}
 }
 
 func (s *hlsSegmentScheduler) takeWritable(now time.Time) []hlsWritableSegment {
@@ -321,6 +350,7 @@ func (s *hlsSegmentScheduler) snapshot(resetPeriod bool) hlsSegmentStats {
 	}
 	if resetPeriod {
 		s.stats.discovered = 0
+		s.stats.suspectedMissed = 0
 		s.stats.maxDownloadMs = 0
 	}
 	return st
@@ -468,6 +498,25 @@ func (s *hlsSegmentScheduler) hasPendingBeforeLocked(candidate hlsSegmentKey) bo
 			continue
 		}
 		if key.less(candidate) {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *hlsSegmentScheduler) hasMSNLocked(msn int) bool {
+	for key := range s.known {
+		if key.msn == msn && !s.finished[key] {
+			return true
+		}
+	}
+	for key := range s.ready {
+		if key.msn == msn && !s.finished[key] {
+			return true
+		}
+	}
+	for key := range s.inflight {
+		if key.msn == msn && !s.finished[key] {
 			return true
 		}
 	}
