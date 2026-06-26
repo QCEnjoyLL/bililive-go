@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/bluele/gcache"
-	kiratools "github.com/kira1928/remotetools/pkg/tools"
 
 	_ "github.com/bililive-go/bililive-go/src/cmd/bililive/internal"
 	"github.com/bililive-go/bililive-go/src/cmd/bililive/internal/flag"
@@ -102,6 +101,10 @@ func getConfigBesidesExecutable() (*configs.Config, error) {
 		return nil, err
 	}
 	return config, nil
+}
+
+func shouldBlockStartupForFFmpeg(config *configs.Config) bool {
+	return config == nil || !config.RPC.Enable
 }
 
 // shouldRunAsLauncher 检查是否需要进入 launcher 模式
@@ -324,29 +327,35 @@ func main() {
 	}
 
 	if !utils.IsFFmpegExist(ctx) {
-		hasFoundFfmpeg := false
-		// try to get from remotetools
-		if err = tools.Init(); err == nil {
-			var toolFfmpeg kiratools.Tool
-			if toolFfmpeg, err = tools.Get().GetTool("ffmpeg"); err == nil {
-				if toolFfmpeg.DoesToolExist() {
-					logger.Infof("FFmpeg found from remotetools: %s", toolFfmpeg.GetToolPath())
-					hasFoundFfmpeg = true
-				} else {
-					if err = toolFfmpeg.Install(); err != nil {
+		if shouldBlockStartupForFFmpeg(config) {
+			hasFoundFfmpeg := false
+			// try to get from remotetools
+			if err = tools.Init(); err == nil {
+				if err = tools.DownloadIfNecessary("ffmpeg"); err != nil {
+					if toolFfmpeg, toolErr := tools.Get().GetTool("ffmpeg"); toolErr == nil {
 						logger.Fatalln(err.Error() + "\nFFmpeg binary not found and install failed from " + toolFfmpeg.GetInstallSource() + ", Please Check.")
-					} else {
-						logger.Infof("FFmpeg found from remotetools: %s", toolFfmpeg.GetToolPath())
-						hasFoundFfmpeg = true
 					}
+					logger.Fatalln(err.Error() + "\nFFmpeg binary not found and install failed, Please Check.")
+				}
+				if ffmpegPath, ffmpegErr := utils.GetFFmpegPath(ctx); ffmpegErr == nil {
+					logger.Infof("FFmpeg found from remotetools: %s", ffmpegPath)
+					hasFoundFfmpeg = true
 				}
 			}
+			if !hasFoundFfmpeg {
+				logger.Fatalln("FFmpeg binary not found, Please Check.")
+			}
+		} else {
+			logger.Warn("FFmpeg binary not found; Web UI will start first and ffmpeg will be downloaded in background. Recording may be unavailable until ffmpeg is ready.")
+			if err = tools.Init(); err != nil {
+				logger.WithError(err).Error("Failed to initialize RemoteTools; will retry in background")
+				tools.AsyncInit()
+			}
+			tools.AsyncDownloadIfNecessary("ffmpeg")
 		}
-		if !hasFoundFfmpeg {
-			logger.Fatalln("FFmpeg binary not found, Please Check.")
-		}
+	} else {
+		tools.AsyncInit()
 	}
-	tools.AsyncInit()
 
 	events.NewDispatcher(ctx)
 

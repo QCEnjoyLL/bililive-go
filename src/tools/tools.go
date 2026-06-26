@@ -245,7 +245,6 @@ func Init() (err error) {
 	blog.GetLogger().Infoln("RemoteTools Web UI started")
 
 	for _, toolName := range []string{
-		"ffmpeg",
 		"dotnet",
 		"bililive-recorder",
 	} {
