@@ -35,8 +35,9 @@ func (k hlsSegmentKey) less(o hlsSegmentKey) bool {
 }
 
 type hlsSegmentRef struct {
-	key hlsSegmentKey
-	url string
+	key     hlsSegmentKey
+	url     string
+	partial bool
 }
 
 type hlsWritableSegment struct {
@@ -132,13 +133,18 @@ func parseMouflonSegments(body []byte, decode func(string) (string, bool)) ([]hl
 			continue
 		}
 		key := hlsSegmentKey{msn: msn, part: part}
-		if _, ok := byKey[key]; ok {
+		ref := hlsSegmentRef{
+			key:     key,
+			url:     strings.Replace(encURL, m[2], realHash, 1),
+			partial: m[3] != "",
+		}
+		if existing, ok := byKey[key]; ok {
+			if existing.partial && !ref.partial {
+				byKey[key] = ref
+			}
 			continue
 		}
-		byKey[key] = hlsSegmentRef{
-			key: key,
-			url: strings.Replace(encURL, m[2], realHash, 1),
-		}
+		byKey[key] = ref
 	}
 	segs := make([]hlsSegmentRef, 0, len(byKey))
 	for _, seg := range byKey {
@@ -146,6 +152,27 @@ func parseMouflonSegments(body []byte, decode func(string) (string, bool)) ([]hl
 	}
 	sort.Slice(segs, func(i, j int) bool { return segs[i].key.less(segs[j].key) })
 	return segs, failedDecode
+}
+
+func preferCompleteMouflonSegments(segs []hlsSegmentRef) ([]hlsSegmentRef, int, int) {
+	fullCount, partCount := 0, 0
+	for _, seg := range segs {
+		if seg.partial {
+			partCount++
+		} else {
+			fullCount++
+		}
+	}
+	if fullCount == 0 {
+		return segs, fullCount, partCount
+	}
+	full := make([]hlsSegmentRef, 0, fullCount)
+	for _, seg := range segs {
+		if !seg.partial {
+			full = append(full, seg)
+		}
+	}
+	return full, fullCount, partCount
 }
 
 func newHLSSegmentScheduler(ctx context.Context, fetch hlsSegmentFetcher) *hlsSegmentScheduler {

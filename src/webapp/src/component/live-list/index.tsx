@@ -283,8 +283,8 @@ const StreamListWithFilter: React.FC<StreamListWithFilterProps> = ({
     );
 };
 
-// 使用动态获取的刷新间隔
-const getRefreshTime = () => getPollIntervalMs();
+// 使用动态获取的刷新间隔；列表运行状态最高 15 秒刷新一次。
+const getListStatusRefreshTime = () => Math.max(5 * 1000, Math.min(getPollIntervalMs(), 15 * 1000));
 
 interface Props {
     navigate: NavigateFunction;
@@ -356,6 +356,9 @@ class LiveList extends React.Component<Props, IState> {
 
     //定时器
     timer!: NodeJS.Timeout;
+
+    private listRequestInFlight = false;
+    private pendingListRefresh = false;
 
     //倒计时定时器
     countdownTimer!: NodeJS.Timeout;
@@ -646,19 +649,19 @@ class LiveList extends React.Component<Props, IState> {
                 if (newEnableSSE) {
                     // 启用SSE，设置SSE订阅
                     this.setupListSSE();
-                    // 减少轮询频率（使用更长的间隔）
+                    // 列表运行状态仍保持短轮询，避免 SSE 漏事件时状态长期停留。
                     clearInterval(this.timer);
                     this.timer = setInterval(() => {
                         this.requestData("livelist");
-                    }, getRefreshTime() * 2); // SSE模式下轮询作为备份，间隔翻倍
+                    }, getListStatusRefreshTime());
                 } else {
                     // 禁用SSE，取消订阅
                     this.cleanupListSSE();
-                    // 恢复正常轮询频率
+                    // 恢复轮询刷新，列表运行状态最高 15 秒更新一次。
                     clearInterval(this.timer);
                     this.timer = setInterval(() => {
                         this.requestData("livelist");
-                    }, getRefreshTime());
+                    }, getListStatusRefreshTime());
                 }
             });
         }
@@ -683,8 +686,8 @@ class LiveList extends React.Component<Props, IState> {
             }
         });
 
-        // 设置轮询定时器，SSE模式下使用更长的间隔作为备份
-        const refreshInterval = this.state.enableListSSE ? getRefreshTime() * 2 : getRefreshTime();
+        // 设置列表运行状态轮询定时器；SSE 作为即时刷新，轮询作为可靠兜底。
+        const refreshInterval = getListStatusRefreshTime();
         this.timer = setInterval(() => {
             this.requestData("livelist"); // Call with a specific targetKey
         }, refreshInterval);
@@ -931,7 +934,7 @@ class LiveList extends React.Component<Props, IState> {
      * 刷新页面数据
      */
     refresh = () => {
-        this.requestListData();
+        this.requestListData(true);
     }
 
     refreshCookie = () => {
@@ -941,7 +944,15 @@ class LiveList extends React.Component<Props, IState> {
     /**
      * 加载列表数据
      */
-    requestListData() {
+    requestListData(force = false) {
+        if (this.listRequestInFlight) {
+            if (force) {
+                this.pendingListRefresh = true;
+            }
+            return;
+        }
+        this.pendingListRefresh = false;
+        this.listRequestInFlight = true;
         api.getRoomList()
             .then(function (rsp: any) {
                 if (rsp.length === 0) {
@@ -1021,7 +1032,17 @@ class LiveList extends React.Component<Props, IState> {
                 });
             })
             .catch(err => {
-                alert(`加载列表数据失败:\n${err}`);
+                if (force) {
+                    alert(`加载列表数据失败:\n${err}`);
+                } else {
+                    console.error('加载列表数据失败:', err);
+                }
+            })
+            .finally(() => {
+                this.listRequestInFlight = false;
+                if (this.pendingListRefresh) {
+                    this.requestListData(true);
+                }
             });
     }
 
@@ -1203,6 +1224,8 @@ class LiveList extends React.Component<Props, IState> {
                         }
                     };
                 });
+                // 表格运行状态依赖 recording/recording_preparing，录制器状态变化时同步刷新列表标签。
+                this.requestListData();
                 break;
 
             case 'danmaku':

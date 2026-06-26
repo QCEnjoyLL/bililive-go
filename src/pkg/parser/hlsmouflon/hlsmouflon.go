@@ -63,9 +63,9 @@ const (
 
 	// 下播判定：区分"网络抖动暂时无新段"与"真下播"。只要 playlist 仍能拉到就认为在播，
 	// 不因短暂无新段误判（避免误判下播 → recorder 5s 后重录、切出多个短文件）。
-	offlineFetchFail = 6               // playlist 连续拉取失败次数（~9s）→ 判定真下播（房间结束/变体消失）
-	mediaStuckTO     = 3 * time.Minute // playlist 仍可拉但超此时长无任何新分段 → 兜底判定卡死下播
-	targetDisableTO  = 2 * time.Minute // CDN 不支持 _HLS_msn 或超时时，临时退回普通 playlist
+	offlineFetchFail = 6                // playlist 连续拉取失败次数（~9s）→ 判定真下播（房间结束/变体消失）
+	mediaStuckTO     = 3 * time.Minute  // playlist 仍可拉但超此时长无任何新分段 → 兜底判定卡死下播
+	targetDisableTO  = 10 * time.Minute // CDN 不支持 _HLS_msn、超时或长期不命中时，临时退回普通 playlist
 )
 
 // segRe 匹配分段文件名 {id}_{msn}_{hash}_{ts}(_partN).mp4，提取 hash。
@@ -182,7 +182,10 @@ func (p *Parser) ParseLiveStream(ctx context.Context, streamUrlInfo *live.Stream
 	var targetFallbacks int
 	var targetHits int
 	var targetMisses int
+	var targetMissStreak int
 	var targetDisabledUntil time.Time
+	var playlistFullRefs int
+	var playlistPartRefs int
 	diagAt := time.Now()
 	flushWritable := func(force bool) {
 		var writable []hlsWritableSegment
@@ -253,12 +256,22 @@ func (p *Parser) ParseLiveStream(ctx context.Context, streamUrlInfo *live.Stream
 				}
 			}
 			segs, failedDecode := parseMouflonSegments(body, p.decode)
+			segs, fullRefs, partRefs := preferCompleteMouflonSegments(segs)
+			playlistFullRefs += fullRefs
+			playlistPartRefs += partRefs
 			if targetMSN > 0 && !targetRequestFailed && len(segs) > 0 {
 				if hlsSegmentsContainMSN(segs, targetMSN) {
 					targetHits++
+					targetMissStreak = 0
 				} else {
 					targetMisses++
+					targetMissStreak++
 				}
+			}
+			if targetMissStreak >= 20 {
+				targetDisabledUntil = time.Now().Add(targetDisableTO)
+				p.logger.Warnf("hlsmouflon: 定向 playlist 连续 %d 次未命中目标 msn，临时退回普通 playlist %s", targetMissStreak, targetDisableTO)
+				targetMissStreak = 0
 			}
 			decFail += failedDecode
 			sched.add(segs)
@@ -307,9 +320,10 @@ func (p *Parser) ParseLiveStream(ctx context.Context, streamUrlInfo *live.Stream
 			if time.Now().Before(targetDisabledUntil) {
 				targetState = "回退"
 			}
-			p.logger.Infof("hlsmouflon 诊断 %s：累计写入 %d 段，新发现 %d 段，确认丢段本周期 %d/累计 %d，疑似漏看 %d，下载失败 %d，重试成功 %d，队列 %d，写入等待 %d，当前 msn=%d，playlist最新msn=%d，liveLag=%d，窗口=%d-%d/%d 段，定向playlist=%s 请求/命中/未中/回退 %d/%d/%d/%d，本周期最大单段下载 %dms",
-				modelID, st.written, st.discovered, gapDelta, st.gaps, st.suspectedMissed, st.downloadFailures, st.retrySuccess, st.queued, st.writeWaits, st.currentMSN, st.lastSeenMSN, st.liveLagMSN, st.windowMinMSN, st.windowMaxMSN, st.windowSegments, targetState, targetRequests, targetHits, targetMisses, targetFallbacks, st.maxDownloadMs)
+			p.logger.Infof("hlsmouflon 诊断 %s：累计写入 %d 段，新发现 %d 段，确认丢段本周期 %d/累计 %d，疑似漏看 %d，下载失败 %d，重试成功 %d，队列 %d，写入等待 %d，当前 msn=%d，playlist最新msn=%d，liveLag=%d，窗口=%d-%d/%d 段，playlist完整/part %d/%d，定向playlist=%s 请求/命中/未中/回退 %d/%d/%d/%d，本周期最大单段下载 %dms",
+				modelID, st.written, st.discovered, gapDelta, st.gaps, st.suspectedMissed, st.downloadFailures, st.retrySuccess, st.queued, st.writeWaits, st.currentMSN, st.lastSeenMSN, st.liveLagMSN, st.windowMinMSN, st.windowMaxMSN, st.windowSegments, playlistFullRefs, playlistPartRefs, targetState, targetRequests, targetHits, targetMisses, targetFallbacks, st.maxDownloadMs)
 			targetRequests, targetHits, targetMisses, targetFallbacks = 0, 0, 0, 0
+			playlistFullRefs, playlistPartRefs = 0, 0
 			diagAt = time.Now()
 		}
 

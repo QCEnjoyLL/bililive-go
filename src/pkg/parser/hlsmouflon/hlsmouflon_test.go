@@ -69,6 +69,54 @@ func TestParseMouflonSegments(t *testing.T) {
 	}
 }
 
+func TestPreferCompleteMouflonSegments(t *testing.T) {
+	segs := []hlsSegmentRef{
+		{key: hlsSegmentKey{msn: 10, part: 0}, url: "seg10_part0", partial: true},
+		{key: hlsSegmentKey{msn: 10, part: 1}, url: "seg10_part1", partial: true},
+		{key: hlsSegmentKey{msn: 10, part: 0}, url: "seg10_full"},
+		{key: hlsSegmentKey{msn: 11, part: 0}, url: "seg11_full"},
+	}
+
+	got, full, part := preferCompleteMouflonSegments(segs)
+	if full != 2 || part != 2 {
+		t.Fatalf("完整/part 统计错误: full=%d part=%d", full, part)
+	}
+	if len(got) != 2 || got[0].url != "seg10_full" || got[1].url != "seg11_full" {
+		t.Fatalf("应只采用完整 segment: %+v", got)
+	}
+
+	partsOnly := []hlsSegmentRef{{key: hlsSegmentKey{msn: 12, part: 0}, url: "seg12_part0", partial: true}}
+	got, full, part = preferCompleteMouflonSegments(partsOnly)
+	if full != 0 || part != 1 || len(got) != 1 || got[0].url != "seg12_part0" {
+		t.Fatalf("纯 part playlist 应保留 part 兜底: got=%+v full=%d part=%d", got, full, part)
+	}
+}
+
+func TestParseMouflonSegmentsPrefersFullOverPartZero(t *testing.T) {
+	body := []byte(strings.Join([]string{
+		"#EXT-X-MOUFLON:URI:https://media-hls.example/room_42_encPart_111_part0.mp4",
+		"#EXT-X-MOUFLON:URI:https://media-hls.example/room_42_encFull_222.mp4",
+	}, "\n"))
+	decode := func(enc string) (string, bool) {
+		switch enc {
+		case "encPart":
+			return "realPart", true
+		case "encFull":
+			return "realFull", true
+		default:
+			return "", false
+		}
+	}
+
+	segs, failed := parseMouflonSegments(body, decode)
+	if failed != 0 || len(segs) != 1 {
+		t.Fatalf("解析结果错误: failed=%d segs=%+v", failed, segs)
+	}
+	if segs[0].partial || !strings.Contains(segs[0].url, "realFull") {
+		t.Fatalf("完整 segment 应覆盖 part0: %+v", segs[0])
+	}
+}
+
 func TestBuildMouflonPlaylistURLPreservesQueryAndTargetsMSN(t *testing.T) {
 	got := buildMouflonPlaylistURL("https://edge.example/live/room.m3u8?foo=bar", "key value", 123)
 	if !strings.HasPrefix(got, "https://edge.example/live/room.m3u8?") {

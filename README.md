@@ -10,6 +10,10 @@ Bililive-go是一个支持多种直播平台的直播录制工具
 >
 > 社区维护的第三方生态项目列表见：[docs/third-party.md](docs/third-party.md)
 
+### AI 协作
+
+本项目的部分开发、排查和文档整理工作由 Codex (OpenAI coding assistant) 协助完成。
+
 ![image](docs/screenshot.webp)
 
 ## 支持网站
