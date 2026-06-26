@@ -31,7 +31,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -55,7 +54,7 @@ const (
 	defaultPkey         = "1Dzcc6OjP73LKbtI"
 	defaultKeystreamHex = "334eff75462ef6a610704bc3d3e7445f"
 
-	pollInterval = 1500 * time.Millisecond
+	pollInterval = 800 * time.Millisecond
 	startupTO    = 40 * time.Second // 启动期一直拿不到有效分段则判定未开播/密钥失效
 
 	// 下播判定：区分"网络抖动暂时无新段"与"真下播"。只要 playlist 仍能拉到就认为在播，
@@ -66,6 +65,7 @@ const (
 
 // segRe 匹配分段文件名 {id}_{msn}_{hash}_{ts}(_partN).mp4，提取 hash。
 var segRe = regexp.MustCompile(`_\d+_([A-Za-z0-9]+)_\d+(?:_part\d+)?\.mp4`)
+var segPartRe = regexp.MustCompile(`_(\d+)_([A-Za-z0-9]+)_\d+(?:_part(\d+))?\.mp4`)
 var mapRe = regexp.MustCompile(`#EXT-X-MAP:URI="([^"]+)"`)
 
 func init() { parser.Register(Name, new(builder)) }
@@ -161,8 +161,9 @@ func (p *Parser) ParseLiveStream(ctx context.Context, streamUrlInfo *live.Stream
 
 	p.logger.Infof("hlsmouflon 开始录制 model=%s -> %s", modelID, file)
 
-	// 3) 轮询：解码真实分段 → 写入 ffmpeg
-	seen := make(map[string]bool)
+	// 3) 轮询 playlist 发现分段；下载、重试和顺序写入交给调度器。
+	sched := newHLSSegmentScheduler(ctx, p.get)
+	defer sched.stop()
 	initDone := false
 	lastData := time.Now()
 	started := false
@@ -170,8 +171,7 @@ func (p *Parser) ParseLiveStream(ctx context.Context, streamUrlInfo *live.Stream
 	var decFail int
 	triedBootstrap := false
 	var fetchFail int // playlist 连续拉取失败计数（区分真下播 vs 网络抖动）
-	// 诊断（排查丢段 vs 网络）：累计写入段数、msn 缺口（丢段）、本周期最大单段下载耗时
-	var segTotal, gapTotal, lastMsn, maxDlMs int
+	var lastDiagGaps int
 	diagAt := time.Now()
 
 	for {
@@ -188,7 +188,6 @@ func (p *Parser) ParseLiveStream(ctx context.Context, streamUrlInfo *live.Stream
 			fetchFail++
 		} else {
 			fetchFail = 0
-			lines := strings.Split(string(body), "\n")
 			if !initDone {
 				if m := mapRe.FindStringSubmatch(string(body)); m != nil {
 					if b, e := p.get(m[1]); e == nil {
@@ -197,52 +196,21 @@ func (p *Parser) ParseLiveStream(ctx context.Context, streamUrlInfo *live.Stream
 					}
 				}
 			}
-			for _, l := range lines {
-				l = strings.TrimSpace(l)
-				if !strings.HasPrefix(l, "#EXT-X-MOUFLON:URI:") {
-					continue
-				}
-				encURL := strings.TrimPrefix(l, "#EXT-X-MOUFLON:URI:")
-				m := segRe.FindStringSubmatch(encURL)
-				if m == nil {
-					continue
-				}
-				realHash, ok := p.decode(m[1])
-				if !ok {
-					decFail++
-					continue
-				}
-				realURL := strings.Replace(encURL, m[1], realHash, 1)
-				if seen[realURL] {
-					continue
-				}
-				seen[realURL] = true
-				t0 := time.Now()
-				seg, e := p.get(realURL)
-				if e != nil {
-					decFail++
-					continue
-				}
-				if ms := int(time.Since(t0).Milliseconds()); ms > maxDlMs {
-					maxDlMs = ms
-				}
-				p.writeSeg(seg)
+			segs, failedDecode := parseMouflonSegments(body, p.decode)
+			decFail += failedDecode
+			sched.add(segs)
+			for _, seg := range sched.takeWritable(time.Now()) {
+				p.writeSeg(seg.body)
 				started = true
 				decFail = 0
 				lastData = time.Now()
-				// 诊断：从真实段文件名提取 msn，检测缺口（丢段）
-				segTotal++
-				if mm := segMsnRe.FindStringSubmatch(realURL); mm != nil {
-					if msn, e2 := strconv.Atoi(mm[1]); e2 == nil {
-						if lastMsn > 0 && msn > lastMsn+1 {
-							gapTotal += msn - lastMsn - 1
-						}
-						if msn > lastMsn {
-							lastMsn = msn
-						}
-					}
-				}
 			}
+		}
+		for _, seg := range sched.takeWritable(time.Now()) {
+			p.writeSeg(seg.body)
+			started = true
+			decFail = 0
+			lastData = time.Now()
 		}
 
 		// 启动期一直失败：若能连上播放列表却解不出分段(decFail>0)，多半是 keystream 失效，
@@ -253,7 +221,8 @@ func (p *Parser) ParseLiveStream(ctx context.Context, streamUrlInfo *live.Stream
 				if newKs, err := bootstrapKeystream(ctx, liveObj, modelID, p.pkey, p.logger); err == nil {
 					p.keystream = newKs
 					saveKeystreamCache(newKs, p.logger)
-					decFail, start, seen = 0, time.Now(), make(map[string]bool)
+					sched.reset()
+					decFail, start = 0, time.Now()
 					p.logger.Infof("hlsmouflon: 已应用引导出的新 keystream，继续录制 %s", modelID)
 					continue
 				} else {
@@ -276,10 +245,12 @@ func (p *Parser) ParseLiveStream(ctx context.Context, streamUrlInfo *live.Stream
 		}
 		// 诊断输出（每 ~30s）：丢段统计帮助判断"跟不上丢段"还是"网络波动"
 		if started && time.Since(diagAt) > 30*time.Second {
-			p.logger.Infof("hlsmouflon 诊断 %s：累计写入 %d 段，丢段累计 %d，当前 msn=%d，本周期最大单段下载 %dms",
-				modelID, segTotal, gapTotal, lastMsn, maxDlMs)
+			st := sched.snapshot(true)
+			gapDelta := st.gaps - lastDiagGaps
+			lastDiagGaps = st.gaps
+			p.logger.Infof("hlsmouflon 诊断 %s：累计写入 %d 段，丢段本周期 %d/累计 %d，下载失败 %d，重试成功 %d，队列 %d，写入等待 %d，当前 msn=%d，本周期最大单段下载 %dms",
+				modelID, st.written, gapDelta, st.gaps, st.downloadFailures, st.retrySuccess, st.queued, st.writeWaits, st.currentMSN, st.maxDownloadMs)
 			diagAt = time.Now()
-			maxDlMs = 0
 		}
 
 		select {
