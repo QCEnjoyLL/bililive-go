@@ -54,7 +54,7 @@ const (
 	defaultPkey         = "1Dzcc6OjP73LKbtI"
 	defaultKeystreamHex = "334eff75462ef6a610704bc3d3e7445f"
 
-	pollInterval = 800 * time.Millisecond
+	pollInterval = 250 * time.Millisecond
 	startupTO    = 40 * time.Second // 启动期一直拿不到有效分段则判定未开播/密钥失效
 
 	// 下播判定：区分"网络抖动暂时无新段"与"真下播"。只要 playlist 仍能拉到就认为在播，
@@ -248,8 +248,8 @@ func (p *Parser) ParseLiveStream(ctx context.Context, streamUrlInfo *live.Stream
 			st := sched.snapshot(true)
 			gapDelta := st.gaps - lastDiagGaps
 			lastDiagGaps = st.gaps
-			p.logger.Infof("hlsmouflon 诊断 %s：累计写入 %d 段，丢段本周期 %d/累计 %d，下载失败 %d，重试成功 %d，队列 %d，写入等待 %d，当前 msn=%d，本周期最大单段下载 %dms",
-				modelID, st.written, gapDelta, st.gaps, st.downloadFailures, st.retrySuccess, st.queued, st.writeWaits, st.currentMSN, st.maxDownloadMs)
+			p.logger.Infof("hlsmouflon 诊断 %s：累计写入 %d 段，新发现 %d 段，丢段本周期 %d/累计 %d，下载失败 %d，重试成功 %d，队列 %d，写入等待 %d，当前 msn=%d，playlist最新msn=%d，本周期最大单段下载 %dms",
+				modelID, st.written, st.discovered, gapDelta, st.gaps, st.downloadFailures, st.retrySuccess, st.queued, st.writeWaits, st.currentMSN, st.lastSeenMSN, st.maxDownloadMs)
 			diagAt = time.Now()
 		}
 

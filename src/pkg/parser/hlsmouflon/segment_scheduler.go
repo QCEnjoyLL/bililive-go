@@ -45,11 +45,13 @@ type hlsWritableSegment struct {
 type hlsSegmentStats struct {
 	written          int
 	gaps             int
+	discovered       int
 	downloadFailures int
 	retrySuccess     int
 	queued           int
 	writeWaits       int
 	currentMSN       int
+	lastSeenMSN      int
 	maxDownloadMs    int
 }
 
@@ -222,9 +224,17 @@ func (s *hlsSegmentScheduler) add(segs []hlsSegmentRef) {
 		if seg.key.msn <= 0 || s.finished[seg.key] {
 			continue
 		}
+		if seg.key.msn > s.stats.lastSeenMSN {
+			s.stats.lastSeenMSN = seg.key.msn
+		}
 		if s.hasLast && !s.lastWritten.less(seg.key) {
 			s.finished[seg.key] = true
 			continue
+		}
+		if _, ok := s.known[seg.key]; !ok {
+			if _, ok := s.ready[seg.key]; !ok && !s.inflight[seg.key] {
+				s.stats.discovered++
+			}
 		}
 		s.known[seg.key] = seg
 	}
@@ -270,6 +280,7 @@ func (s *hlsSegmentScheduler) snapshot(resetPeriod bool) hlsSegmentStats {
 	st := s.stats
 	st.queued = s.queueLenLocked()
 	if resetPeriod {
+		s.stats.discovered = 0
 		s.stats.maxDownloadMs = 0
 	}
 	return st
