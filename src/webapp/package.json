@@ -43,6 +43,12 @@
       "last 1 safari version"
     ]
   },
+  "overrides": {
+    "@types/react": "18.2.0"
+  },
+  "resolutions": {
+    "@types/react": "18.2.0"
+  },
   "proxy": "http://127.0.0.1:8080/",
   "devDependencies": {
     "@testing-library/jest-dom": "^5.0.0",
