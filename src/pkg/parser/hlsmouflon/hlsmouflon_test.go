@@ -119,7 +119,7 @@ func TestSegmentSchedulerWritesInOrderWhenDownloadsFinishOutOfOrder(t *testing.T
 	}
 }
 
-func TestSegmentSchedulerSkipsMissingGapImmediately(t *testing.T) {
+func TestSegmentSchedulerDoesNotCountUnobservedMSNAsGap(t *testing.T) {
 	restore := tuneSchedulerForTest()
 	defer restore()
 
@@ -137,8 +137,92 @@ func TestSegmentSchedulerSkipsMissingGapImmediately(t *testing.T) {
 		t.Fatalf("缺口超时后的写入顺序错误: %q, %q", string(got[0].body), string(got[1].body))
 	}
 	st := s.snapshot(false)
-	if st.gaps != 1 || st.writeWaits != 0 {
-		t.Fatalf("缺口统计错误: %+v", st)
+	if st.gaps != 0 {
+		t.Fatalf("未观察到的 msn 不应计为确认丢段: %+v", st)
+	}
+}
+
+func TestSegmentSchedulerCountsOnlyObservedPendingGap(t *testing.T) {
+	restore := tuneSchedulerForTest()
+	defer restore()
+
+	s := newHLSSegmentScheduler(context.Background(), func(url string) ([]byte, error) {
+		if url == "seg2" {
+			return nil, errTestDownload
+		}
+		return []byte(url), nil
+	})
+	defer s.stop()
+
+	s.add([]hlsSegmentRef{
+		{key: hlsSegmentKey{msn: 1}, url: "seg1"},
+		{key: hlsSegmentKey{msn: 2}, url: "seg2"},
+		{key: hlsSegmentKey{msn: 3}, url: "seg3"},
+	})
+	got := waitWritable(t, s, 2)
+	if string(got[0].body) != "seg1" || string(got[1].body) != "seg3" {
+		t.Fatalf("观察到的缺口跳过后写入顺序错误: %q, %q", string(got[0].body), string(got[1].body))
+	}
+	st := s.snapshot(false)
+	if st.gaps != 1 || st.writeWaits == 0 {
+		t.Fatalf("观察到的待处理缺口统计错误: %+v", st)
+	}
+}
+
+func TestSegmentSchedulerHoldsNearLiveEdge(t *testing.T) {
+	restore := tuneSchedulerForTest()
+	defer restore()
+	hlsLiveEdgeHold = 2
+	hlsLiveEdgeMaxWait = 40 * time.Millisecond
+
+	s := newHLSSegmentScheduler(context.Background(), func(url string) ([]byte, error) {
+		return []byte(url), nil
+	})
+	defer s.stop()
+
+	s.add([]hlsSegmentRef{
+		{key: hlsSegmentKey{msn: 1}, url: "seg1"},
+		{key: hlsSegmentKey{msn: 2}, url: "seg2"},
+		{key: hlsSegmentKey{msn: 3}, url: "seg3"},
+	})
+	got := waitWritable(t, s, 1)
+	if string(got[0].body) != "seg1" {
+		t.Fatalf("第一个分段应立即写入: %q", string(got[0].body))
+	}
+
+	if next := s.takeWritable(time.Now()); len(next) != 0 {
+		t.Fatalf("靠近直播边缘的分段应先等待: got=%d", len(next))
+	}
+	time.Sleep(50 * time.Millisecond)
+	if next := s.takeWritable(time.Now()); len(next) == 0 || string(next[0].body) != "seg2" {
+		t.Fatalf("等待上限后应继续写入: %+v", next)
+	}
+}
+
+func TestSegmentSchedulerFinalFlushBypassesLiveEdgeHold(t *testing.T) {
+	restore := tuneSchedulerForTest()
+	defer restore()
+	hlsLiveEdgeHold = 2
+	hlsLiveEdgeMaxWait = time.Second
+
+	s := newHLSSegmentScheduler(context.Background(), func(url string) ([]byte, error) {
+		return []byte(url), nil
+	})
+	defer s.stop()
+
+	s.add([]hlsSegmentRef{
+		{key: hlsSegmentKey{msn: 1}, url: "seg1"},
+		{key: hlsSegmentKey{msn: 2}, url: "seg2"},
+		{key: hlsSegmentKey{msn: 3}, url: "seg3"},
+	})
+	got := waitWritable(t, s, 1)
+	if string(got[0].body) != "seg1" {
+		t.Fatalf("第一个分段应立即写入: %q", string(got[0].body))
+	}
+
+	final := s.takeWritableFinal(time.Now())
+	if len(final) == 0 || string(final[0].body) != "seg2" {
+		t.Fatalf("final flush 应绕过直播边缘等待: %+v", final)
 	}
 }
 
@@ -151,13 +235,18 @@ func (*testDownloadError) Error() string { return "test download failed" }
 func tuneSchedulerForTest() func() {
 	oldPendingGapWait := hlsPendingGapWait
 	oldRetryBase, oldRetryMax := hlsRetryBase, hlsRetryMax
+	oldLiveEdgeHold, oldLiveEdgeMaxWait := hlsLiveEdgeHold, hlsLiveEdgeMaxWait
 	hlsPendingGapWait = 30 * time.Millisecond
 	hlsRetryBase = 5 * time.Millisecond
 	hlsRetryMax = 20 * time.Millisecond
+	hlsLiveEdgeHold = 0
+	hlsLiveEdgeMaxWait = 30 * time.Millisecond
 	return func() {
 		hlsPendingGapWait = oldPendingGapWait
 		hlsRetryBase = oldRetryBase
 		hlsRetryMax = oldRetryMax
+		hlsLiveEdgeHold = oldLiveEdgeHold
+		hlsLiveEdgeMaxWait = oldLiveEdgeMaxWait
 	}
 }
 

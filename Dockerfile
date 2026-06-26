@@ -105,7 +105,7 @@ RUN set -eux; \
         find /opt/bililive/tools -name '.gitkeep' -delete 2>/dev/null || true; \
     else \
         echo "=== 本地模式: 通过 sync-built-in-tools 下载 ==="; \
-        /usr/bin/bililive-go --sync-built-in-tools-to-path /opt/bililive/tools || true; \
+        /usr/bin/bililive-go --sync-built-in-tools-to-path /opt/bililive/tools; \
     fi
 
 COPY entrypoint.sh /entrypoint.sh

@@ -173,12 +173,29 @@ func (p *Parser) ParseLiveStream(ctx context.Context, streamUrlInfo *live.Stream
 	var fetchFail int // playlist 连续拉取失败计数（区分真下播 vs 网络抖动）
 	var lastDiagGaps int
 	diagAt := time.Now()
+	flushWritable := func(force bool) {
+		var writable []hlsWritableSegment
+		if force {
+			writable = sched.takeWritableFinal(time.Now())
+		} else {
+			writable = sched.takeWritable(time.Now())
+		}
+		for _, seg := range writable {
+			p.writeSeg(seg.body)
+			started = true
+			decFail = 0
+			lastData = time.Now()
+		}
+	}
+	defer flushWritable(true)
 
 	for {
 		select {
 		case <-ctx.Done():
+			flushWritable(true)
 			return nil
 		case <-p.stopCh:
+			flushWritable(true)
 			return nil
 		default:
 		}
@@ -199,19 +216,9 @@ func (p *Parser) ParseLiveStream(ctx context.Context, streamUrlInfo *live.Stream
 			segs, failedDecode := parseMouflonSegments(body, p.decode)
 			decFail += failedDecode
 			sched.add(segs)
-			for _, seg := range sched.takeWritable(time.Now()) {
-				p.writeSeg(seg.body)
-				started = true
-				decFail = 0
-				lastData = time.Now()
-			}
+			flushWritable(false)
 		}
-		for _, seg := range sched.takeWritable(time.Now()) {
-			p.writeSeg(seg.body)
-			started = true
-			decFail = 0
-			lastData = time.Now()
-		}
+		flushWritable(false)
 
 		// 启动期一直失败：若能连上播放列表却解不出分段(decFail>0)，多半是 keystream 失效，
 		// 用无头浏览器引导一次新密钥并继续；纯未开播(decFail==0)或引导失败则返回。
@@ -237,10 +244,12 @@ func (p *Parser) ParseLiveStream(ctx context.Context, streamUrlInfo *live.Stream
 		// 只要 playlist 还能拉到、只是暂时没有新段，就继续轮询、不误判下播（不触发重录）。
 		if started && fetchFail >= offlineFetchFail {
 			p.logger.Infof("hlsmouflon: %s playlist 连续 %d 次拉取失败，判定下播", modelID, fetchFail)
+			flushWritable(true)
 			return nil
 		}
 		if started && time.Since(lastData) > mediaStuckTO {
 			p.logger.Infof("hlsmouflon: %s 超过 %s 无新分段（playlist 仍在但卡死），判定下播", modelID, mediaStuckTO)
+			flushWritable(true)
 			return nil
 		}
 		// 诊断输出（每 ~30s）：丢段统计帮助判断"跟不上丢段"还是"网络波动"
@@ -248,15 +257,17 @@ func (p *Parser) ParseLiveStream(ctx context.Context, streamUrlInfo *live.Stream
 			st := sched.snapshot(true)
 			gapDelta := st.gaps - lastDiagGaps
 			lastDiagGaps = st.gaps
-			p.logger.Infof("hlsmouflon 诊断 %s：累计写入 %d 段，新发现 %d 段，丢段本周期 %d/累计 %d，下载失败 %d，重试成功 %d，队列 %d，写入等待 %d，当前 msn=%d，playlist最新msn=%d，本周期最大单段下载 %dms",
-				modelID, st.written, st.discovered, gapDelta, st.gaps, st.downloadFailures, st.retrySuccess, st.queued, st.writeWaits, st.currentMSN, st.lastSeenMSN, st.maxDownloadMs)
+			p.logger.Infof("hlsmouflon 诊断 %s：累计写入 %d 段，新发现 %d 段，确认丢段本周期 %d/累计 %d，下载失败 %d，重试成功 %d，队列 %d，写入等待 %d，当前 msn=%d，playlist最新msn=%d，liveLag=%d，窗口=%d-%d/%d 段，本周期最大单段下载 %dms",
+				modelID, st.written, st.discovered, gapDelta, st.gaps, st.downloadFailures, st.retrySuccess, st.queued, st.writeWaits, st.currentMSN, st.lastSeenMSN, st.liveLagMSN, st.windowMinMSN, st.windowMaxMSN, st.windowSegments, st.maxDownloadMs)
 			diagAt = time.Now()
 		}
 
 		select {
 		case <-ctx.Done():
+			flushWritable(true)
 			return nil
 		case <-p.stopCh:
+			flushWritable(true)
 			return nil
 		case <-time.After(pollInterval):
 		}

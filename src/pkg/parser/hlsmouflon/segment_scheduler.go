@@ -15,9 +15,11 @@ const (
 )
 
 var (
-	hlsPendingGapWait = 12 * time.Second
-	hlsRetryBase      = 300 * time.Millisecond
-	hlsRetryMax       = 2 * time.Second
+	hlsPendingGapWait  = 12 * time.Second
+	hlsRetryBase       = 300 * time.Millisecond
+	hlsRetryMax        = 2 * time.Second
+	hlsLiveEdgeHold    = 2
+	hlsLiveEdgeMaxWait = 15 * time.Second
 )
 
 type hlsSegmentKey struct {
@@ -52,6 +54,10 @@ type hlsSegmentStats struct {
 	writeWaits       int
 	currentMSN       int
 	lastSeenMSN      int
+	windowMinMSN     int
+	windowMaxMSN     int
+	windowSegments   int
+	liveLagMSN       int
 	maxDownloadMs    int
 }
 
@@ -91,6 +97,8 @@ type hlsSegmentScheduler struct {
 	hasLast     bool
 	lastWritten hlsSegmentKey
 	gapSince    time.Time
+	edgeSince   time.Time
+	edgeHoldKey hlsSegmentKey
 	stats       hlsSegmentStats
 }
 
@@ -220,6 +228,7 @@ func (s *hlsSegmentScheduler) add(segs []hlsSegmentRef) {
 	s.collectResults()
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.updatePlaylistWindowLocked(segs)
 	for _, seg := range segs {
 		if seg.key.msn <= 0 || s.finished[seg.key] {
 			continue
@@ -241,7 +250,35 @@ func (s *hlsSegmentScheduler) add(segs []hlsSegmentRef) {
 	s.scheduleLocked(time.Now())
 }
 
+func (s *hlsSegmentScheduler) updatePlaylistWindowLocked(segs []hlsSegmentRef) {
+	s.stats.windowSegments = len(segs)
+	if len(segs) == 0 {
+		s.stats.windowMinMSN = 0
+		s.stats.windowMaxMSN = 0
+		return
+	}
+	minMSN, maxMSN := segs[0].key.msn, segs[0].key.msn
+	for _, seg := range segs[1:] {
+		if seg.key.msn < minMSN {
+			minMSN = seg.key.msn
+		}
+		if seg.key.msn > maxMSN {
+			maxMSN = seg.key.msn
+		}
+	}
+	s.stats.windowMinMSN = minMSN
+	s.stats.windowMaxMSN = maxMSN
+}
+
 func (s *hlsSegmentScheduler) takeWritable(now time.Time) []hlsWritableSegment {
+	return s.takeWritableInternal(now, false)
+}
+
+func (s *hlsSegmentScheduler) takeWritableFinal(now time.Time) []hlsWritableSegment {
+	return s.takeWritableInternal(now, true)
+}
+
+func (s *hlsSegmentScheduler) takeWritableInternal(now time.Time, force bool) []hlsWritableSegment {
 	s.collectResults()
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -256,7 +293,7 @@ func (s *hlsSegmentScheduler) takeWritable(now time.Time) []hlsWritableSegment {
 			s.finishLocked(candidate.key)
 			continue
 		}
-		if !s.canAdvanceLocked(candidate.key, now) {
+		if !s.canAdvanceLocked(candidate.key, now, force) {
 			break
 		}
 		seg := s.ready[candidate.key]
@@ -279,6 +316,9 @@ func (s *hlsSegmentScheduler) snapshot(resetPeriod bool) hlsSegmentStats {
 	defer s.mu.Unlock()
 	st := s.stats
 	st.queued = s.queueLenLocked()
+	if s.hasLast && st.lastSeenMSN >= s.lastWritten.msn {
+		st.liveLagMSN = st.lastSeenMSN - s.lastWritten.msn
+	}
 	if resetPeriod {
 		s.stats.discovered = 0
 		s.stats.maxDownloadMs = 0
@@ -372,28 +412,49 @@ func (s *hlsSegmentScheduler) firstReadyLocked() (hlsWritableSegment, bool) {
 	return s.ready[keys[0]], true
 }
 
-func (s *hlsSegmentScheduler) canAdvanceLocked(candidate hlsSegmentKey, now time.Time) bool {
+func (s *hlsSegmentScheduler) canAdvanceLocked(candidate hlsSegmentKey, now time.Time, force bool) bool {
 	hasPendingBefore := s.hasPendingBeforeLocked(candidate)
-	hasMissingGap := s.hasLast && candidate.msn > s.lastWritten.msn+1
-	if !hasPendingBefore {
-		if hasMissingGap {
-			s.stats.gaps += candidate.msn - s.lastWritten.msn - 1
-			s.skipBeforeLocked(candidate)
+	if force {
+		if hasPendingBefore {
+			s.stats.gaps += s.skipBeforeLocked(candidate)
 		}
+		s.edgeSince = time.Time{}
 		return true
+	}
+	if !hasPendingBefore {
+		return s.canPassLiveEdgeLocked(candidate, now)
 	}
 
 	if !s.gapSince.IsZero() && now.Sub(s.gapSince) >= hlsPendingGapWait {
-		if hasMissingGap {
-			s.stats.gaps += candidate.msn - s.lastWritten.msn - 1
-		}
-		s.skipBeforeLocked(candidate)
+		s.stats.gaps += s.skipBeforeLocked(candidate)
 		s.gapSince = time.Time{}
-		return true
+		return s.canPassLiveEdgeLocked(candidate, now)
 	}
 	if s.gapSince.IsZero() {
 		s.gapSince = now
 		s.stats.writeWaits++
+	}
+	return false
+}
+
+func (s *hlsSegmentScheduler) canPassLiveEdgeLocked(candidate hlsSegmentKey, now time.Time) bool {
+	if !s.hasLast || hlsLiveEdgeHold <= 0 || s.stats.lastSeenMSN <= 0 {
+		s.edgeSince = time.Time{}
+		return true
+	}
+	if s.stats.lastSeenMSN-candidate.msn >= hlsLiveEdgeHold {
+		s.edgeSince = time.Time{}
+		return true
+	}
+	if s.edgeSince.IsZero() || s.edgeHoldKey != candidate {
+		s.edgeSince = now
+		s.edgeHoldKey = candidate
+		s.stats.writeWaits++
+		return false
+	}
+	if now.Sub(s.edgeSince) >= hlsLiveEdgeMaxWait {
+		s.edgeSince = time.Time{}
+		return true
 	}
 	return false
 }
@@ -413,7 +474,8 @@ func (s *hlsSegmentScheduler) hasPendingBeforeLocked(candidate hlsSegmentKey) bo
 	return false
 }
 
-func (s *hlsSegmentScheduler) skipBeforeLocked(candidate hlsSegmentKey) {
+func (s *hlsSegmentScheduler) skipBeforeLocked(candidate hlsSegmentKey) int {
+	skipped := 0
 	for key := range s.known {
 		if s.hasLast && !s.lastWritten.less(key) {
 			s.finishLocked(key)
@@ -421,8 +483,10 @@ func (s *hlsSegmentScheduler) skipBeforeLocked(candidate hlsSegmentKey) {
 		}
 		if key.less(candidate) {
 			s.finishLocked(key)
+			skipped++
 		}
 	}
+	return skipped
 }
 
 func (s *hlsSegmentScheduler) finishLocked(key hlsSegmentKey) {

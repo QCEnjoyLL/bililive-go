@@ -37,7 +37,7 @@ const __dirname = dirname(__filename);
 // ===========================================================================
 
 /** Docker 内置工具列表（与 SyncBuiltInTools() 中的列表一致） */
-const DOCKER_BUILTIN_TOOLS = ['ffmpeg', 'dotnet', 'bililive-recorder', 'node', 'biliLive-tools'];
+const DOCKER_BUILTIN_TOOLS = ['ffmpeg', 'dotnet', 'bililive-recorder', 'node', 'biliLive-tools', 'bililive-scheduler'];
 
 /**
  * ffmpeg 在 arm/armv7 上通过 apt 安装，不需要预下载。

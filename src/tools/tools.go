@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -149,12 +150,16 @@ func SyncBuiltInTools(targetToolFolder string) (err error) {
 		"bililive-recorder",
 		"node",
 		"biliLive-tools",
+		"bililive-scheduler",
 	} {
+		if toolName == "ffmpeg" && runtime.GOOS == "linux" && runtime.GOARCH == "arm" {
+			blog.GetLogger().Infoln("Skipping built-in ffmpeg sync on linux/arm; using apt ffmpeg")
+			continue
+		}
 		var tool tools.Tool
 		tool, err = api.GetTool(toolName)
 		if err != nil {
-			blog.GetLogger().WithError(err).Warn("failed to get built-in tool:", toolName)
-			continue
+			return fmt.Errorf("failed to get built-in tool %s: %w", toolName, err)
 		}
 		if !tool.DoesToolExist() {
 			blog.GetLogger().Infoln("Installing built-in tool:", toolName)
