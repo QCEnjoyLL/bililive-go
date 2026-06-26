@@ -119,7 +119,7 @@ func TestSegmentSchedulerWritesInOrderWhenDownloadsFinishOutOfOrder(t *testing.T
 	}
 }
 
-func TestSegmentSchedulerSkipsGapAfterTimeout(t *testing.T) {
+func TestSegmentSchedulerSkipsMissingGapImmediately(t *testing.T) {
 	restore := tuneSchedulerForTest()
 	defer restore()
 
@@ -137,7 +137,7 @@ func TestSegmentSchedulerSkipsGapAfterTimeout(t *testing.T) {
 		t.Fatalf("缺口超时后的写入顺序错误: %q, %q", string(got[0].body), string(got[1].body))
 	}
 	st := s.snapshot(false)
-	if st.gaps != 1 || st.writeWaits == 0 {
+	if st.gaps != 1 || st.writeWaits != 0 {
 		t.Fatalf("缺口统计错误: %+v", st)
 	}
 }
@@ -149,15 +149,12 @@ type testDownloadError struct{}
 func (*testDownloadError) Error() string { return "test download failed" }
 
 func tuneSchedulerForTest() func() {
-	oldMissingGapWait := hlsMissingGapWait
 	oldPendingGapWait := hlsPendingGapWait
 	oldRetryBase, oldRetryMax := hlsRetryBase, hlsRetryMax
-	hlsMissingGapWait = 30 * time.Millisecond
 	hlsPendingGapWait = 30 * time.Millisecond
 	hlsRetryBase = 5 * time.Millisecond
 	hlsRetryMax = 20 * time.Millisecond
 	return func() {
-		hlsMissingGapWait = oldMissingGapWait
 		hlsPendingGapWait = oldPendingGapWait
 		hlsRetryBase = oldRetryBase
 		hlsRetryMax = oldRetryMax

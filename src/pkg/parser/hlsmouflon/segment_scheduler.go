@@ -15,7 +15,6 @@ const (
 )
 
 var (
-	hlsMissingGapWait = 3 * time.Second
 	hlsPendingGapWait = 12 * time.Second
 	hlsRetryBase      = 300 * time.Millisecond
 	hlsRetryMax       = 2 * time.Second
@@ -365,15 +364,15 @@ func (s *hlsSegmentScheduler) firstReadyLocked() (hlsWritableSegment, bool) {
 func (s *hlsSegmentScheduler) canAdvanceLocked(candidate hlsSegmentKey, now time.Time) bool {
 	hasPendingBefore := s.hasPendingBeforeLocked(candidate)
 	hasMissingGap := s.hasLast && candidate.msn > s.lastWritten.msn+1
-	if !hasPendingBefore && !hasMissingGap {
+	if !hasPendingBefore {
+		if hasMissingGap {
+			s.stats.gaps += candidate.msn - s.lastWritten.msn - 1
+			s.skipBeforeLocked(candidate)
+		}
 		return true
 	}
 
-	waitLimit := hlsMissingGapWait
-	if hasPendingBefore {
-		waitLimit = hlsPendingGapWait
-	}
-	if !s.gapSince.IsZero() && now.Sub(s.gapSince) >= waitLimit {
+	if !s.gapSince.IsZero() && now.Sub(s.gapSince) >= hlsPendingGapWait {
 		if hasMissingGap {
 			s.stats.gaps += candidate.msn - s.lastWritten.msn - 1
 		}
