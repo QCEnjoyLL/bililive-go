@@ -383,6 +383,14 @@ const UpdatePage: React.FC = () => {
     return `${(bytesPerSecond / 1024 / 1024).toFixed(1)} MB/s`;
   };
 
+  const hasValidReleaseDate = (date?: string) => {
+    return !!date && !date.startsWith('0001-01-01');
+  };
+
+  const hasValidAssetSize = (size?: number) => {
+    return typeof size === 'number' && size > 0;
+  };
+
   // 获取状态徽章
   const getStateBadge = (state: string) => {
     switch (state) {
@@ -590,8 +598,8 @@ const UpdatePage: React.FC = () => {
           style={{ marginBottom: 16 }}
         >
           <Space direction="vertical" style={{ width: '100%' }} size="middle">
-            {updateInfo?.release_date && (
-              <Text type="secondary">发布日期: {updateInfo.release_date}</Text>
+            {hasValidReleaseDate(updateInfo?.release_date) && (
+              <Text type="secondary">发布日期: {updateInfo?.release_date}</Text>
             )}
 
             {updateInfo?.changelog && (
@@ -612,9 +620,9 @@ const UpdatePage: React.FC = () => {
               </>
             )}
 
-            {updateInfo?.asset_size && (
+            {hasValidAssetSize(updateInfo?.asset_size) && (
               <Text type="secondary">
-                文件大小: {formatSize(updateInfo.asset_size)}
+                文件大小: {formatSize(updateInfo?.asset_size || 0)}
               </Text>
             )}
 
@@ -723,11 +731,19 @@ const UpdatePage: React.FC = () => {
         <Space direction="vertical" size="small">
           <Text>
             <InfoCircleOutlined style={{ marginRight: 8 }} />
-            <strong>优雅更新</strong>：等待所有正在进行的录制完成后自动更新，不会中断录制。
+            <strong>下载更新</strong>：先把新版本下载到本地，下载完成后才会出现应用更新按钮。
+          </Text>
+          <Text>
+            <InfoCircleOutlined style={{ marginRight: 8 }} />
+            <strong>立即更新</strong>：当前没有录制时直接切换到新版本。
+          </Text>
+          <Text>
+            <InfoCircleOutlined style={{ marginRight: 8 }} />
+            <strong>优雅更新</strong>：有录制进行中时可选择等待录制全部完成后自动切换，不会中断录制。
           </Text>
           <Text>
             <WarningOutlined style={{ marginRight: 8, color: '#faad14' }} />
-            <strong>强制更新</strong>：立即更新程序，会中断所有正在进行的录制。
+            <strong>强制更新</strong>：有录制进行中时可选择立即切换，会中断正在进行的录制。
           </Text>
           {ENABLE_VERSION_SWITCH_UI && (
             <Text>
