@@ -15,9 +15,10 @@ const (
 )
 
 var (
-	hlsGapWait   = 2200 * time.Millisecond
-	hlsRetryBase = 300 * time.Millisecond
-	hlsRetryMax  = 2 * time.Second
+	hlsMissingGapWait = 3 * time.Second
+	hlsPendingGapWait = 12 * time.Second
+	hlsRetryBase      = 300 * time.Millisecond
+	hlsRetryMax       = 2 * time.Second
 )
 
 type hlsSegmentKey struct {
@@ -362,27 +363,29 @@ func (s *hlsSegmentScheduler) firstReadyLocked() (hlsWritableSegment, bool) {
 }
 
 func (s *hlsSegmentScheduler) canAdvanceLocked(candidate hlsSegmentKey, now time.Time) bool {
-	waitingGap := s.hasPendingBeforeLocked(candidate)
-	if s.hasLast && candidate.msn > s.lastWritten.msn+1 {
-		waitingGap = true
+	hasPendingBefore := s.hasPendingBeforeLocked(candidate)
+	hasMissingGap := s.hasLast && candidate.msn > s.lastWritten.msn+1
+	if !hasPendingBefore && !hasMissingGap {
+		return true
 	}
-	if !waitingGap {
+
+	waitLimit := hlsMissingGapWait
+	if hasPendingBefore {
+		waitLimit = hlsPendingGapWait
+	}
+	if !s.gapSince.IsZero() && now.Sub(s.gapSince) >= waitLimit {
+		if hasMissingGap {
+			s.stats.gaps += candidate.msn - s.lastWritten.msn - 1
+		}
+		s.skipBeforeLocked(candidate)
+		s.gapSince = time.Time{}
 		return true
 	}
 	if s.gapSince.IsZero() {
 		s.gapSince = now
 		s.stats.writeWaits++
-		return false
 	}
-	if now.Sub(s.gapSince) < hlsGapWait {
-		return false
-	}
-	if s.hasLast && candidate.msn > s.lastWritten.msn+1 {
-		s.stats.gaps += candidate.msn - s.lastWritten.msn - 1
-	}
-	s.skipBeforeLocked(candidate)
-	s.gapSince = time.Time{}
-	return true
+	return false
 }
 
 func (s *hlsSegmentScheduler) hasPendingBeforeLocked(candidate hlsSegmentKey) bool {

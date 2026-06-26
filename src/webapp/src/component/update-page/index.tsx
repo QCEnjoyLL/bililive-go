@@ -126,6 +126,9 @@ const UpdatePage: React.FC = () => {
       }
       if (statusRes) {
         setUpdateStatus(statusRes as UpdateStatus);
+        if (statusRes.state === 'failed' && statusRes.error) {
+          setError(statusRes.error);
+        }
         // 从 status 响应中恢复 updateInfo（刷新页面后保持状态）
         if (statusRes.available_info) {
           setUpdateInfo(statusRes.available_info as UpdateInfo);
@@ -427,6 +430,7 @@ const UpdatePage: React.FC = () => {
 
   const isReady = updateStatus?.state === 'ready';
   const hasUpdate = updateInfo || updateStatus?.state === 'available' || isReady;
+  const hasCheckError = updateStatus?.state === 'failed' || !!error;
 
   return (
     <div className="update-page">
@@ -670,7 +674,7 @@ const UpdatePage: React.FC = () => {
       )}
 
       {/* 无更新提示 */}
-      {!hasUpdate && !checking && (
+      {!hasUpdate && !checking && !hasCheckError && (
         <Card>
           <div style={{ textAlign: 'center', padding: '40px 0' }}>
             <CheckCircleOutlined style={{ fontSize: 48, color: '#52c41a', marginBottom: 16 }} />

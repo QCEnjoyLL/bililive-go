@@ -4,6 +4,7 @@ package update
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"runtime"
@@ -225,7 +226,11 @@ func (c *Checker) fetchReleases() ([]githubRelease, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("GitHub API 返回错误状态码: %d", resp.StatusCode)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		if resp.StatusCode == http.StatusForbidden {
+			return nil, fmt.Errorf("GitHub API 返回 403，可能是未认证请求触发限流或被网络环境拒绝，请稍后重试；响应: %s", strings.TrimSpace(string(body)))
+		}
+		return nil, fmt.Errorf("GitHub API 返回错误状态码: %d；响应: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 
 	var releases []githubRelease

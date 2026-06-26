@@ -99,7 +99,7 @@ func TestSegmentSchedulerRetriesFailedDownload(t *testing.T) {
 func TestSegmentSchedulerWritesInOrderWhenDownloadsFinishOutOfOrder(t *testing.T) {
 	restore := tuneSchedulerForTest()
 	defer restore()
-	hlsGapWait = 200 * time.Millisecond
+	hlsPendingGapWait = 200 * time.Millisecond
 
 	s := newHLSSegmentScheduler(context.Background(), func(url string) ([]byte, error) {
 		if url == "seg1" {
@@ -149,12 +149,16 @@ type testDownloadError struct{}
 func (*testDownloadError) Error() string { return "test download failed" }
 
 func tuneSchedulerForTest() func() {
-	oldGapWait, oldRetryBase, oldRetryMax := hlsGapWait, hlsRetryBase, hlsRetryMax
-	hlsGapWait = 30 * time.Millisecond
+	oldMissingGapWait := hlsMissingGapWait
+	oldPendingGapWait := hlsPendingGapWait
+	oldRetryBase, oldRetryMax := hlsRetryBase, hlsRetryMax
+	hlsMissingGapWait = 30 * time.Millisecond
+	hlsPendingGapWait = 30 * time.Millisecond
 	hlsRetryBase = 5 * time.Millisecond
 	hlsRetryMax = 20 * time.Millisecond
 	return func() {
-		hlsGapWait = oldGapWait
+		hlsMissingGapWait = oldMissingGapWait
+		hlsPendingGapWait = oldPendingGapWait
 		hlsRetryBase = oldRetryBase
 		hlsRetryMax = oldRetryMax
 	}
