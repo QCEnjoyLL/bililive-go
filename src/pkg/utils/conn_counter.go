@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	blog "github.com/bililive-go/bililive-go/src/log"
@@ -26,13 +27,17 @@ type connCounter struct {
 
 func (c *connCounter) Read(b []byte) (n int, err error) {
 	n, err = c.Conn.Read(b)
-	c.ByteCounter.ReadBytes += int64(n)
+	if n > 0 {
+		atomic.AddInt64(&c.ByteCounter.ReadBytes, int64(n))
+	}
 	return
 }
 
 func (c *connCounter) Write(b []byte) (n int, err error) {
 	n, err = c.Conn.Write(b)
-	c.ByteCounter.WriteBytes += int64(n)
+	if n > 0 {
+		atomic.AddInt64(&c.ByteCounter.WriteBytes, int64(n))
+	}
 	return
 }
 
@@ -83,8 +88,10 @@ func (m *ConnCounterManagerType) PrintMap() {
 	m.mapLock.Lock()
 	defer m.mapLock.Unlock()
 	for url, counter := range m.bcMap {
+		readBytes := atomic.LoadInt64(&counter.ReadBytes)
+		writeBytes := atomic.LoadInt64(&counter.WriteBytes)
 		blog.GetLogger().Infof("host[%s] TCP bytes received: %s, sent: %s", url,
-			FormatBytes(counter.ReadBytes), FormatBytes(counter.WriteBytes))
+			FormatBytes(readBytes), FormatBytes(writeBytes))
 	}
 }
 
@@ -103,12 +110,14 @@ func (m *ConnCounterManagerType) GetAllStats() []ConnStats {
 	defer m.mapLock.Unlock()
 	stats := make([]ConnStats, 0, len(m.bcMap))
 	for host, counter := range m.bcMap {
+		readBytes := atomic.LoadInt64(&counter.ReadBytes)
+		writeBytes := atomic.LoadInt64(&counter.WriteBytes)
 		stats = append(stats, ConnStats{
 			Host:           host,
-			ReceivedBytes:  counter.ReadBytes,
-			ReceivedFormat: FormatBytes(counter.ReadBytes),
-			SentBytes:      counter.WriteBytes,
-			SentFormat:     FormatBytes(counter.WriteBytes),
+			ReceivedBytes:  readBytes,
+			ReceivedFormat: FormatBytes(readBytes),
+			SentBytes:      writeBytes,
+			SentFormat:     FormatBytes(writeBytes),
 		})
 	}
 	return stats
@@ -121,12 +130,14 @@ func (m *ConnCounterManagerType) GetStatsByHostPrefix(prefix string) []ConnStats
 	stats := make([]ConnStats, 0)
 	for host, counter := range m.bcMap {
 		if strings.Contains(host, prefix) {
+			readBytes := atomic.LoadInt64(&counter.ReadBytes)
+			writeBytes := atomic.LoadInt64(&counter.WriteBytes)
 			stats = append(stats, ConnStats{
 				Host:           host,
-				ReceivedBytes:  counter.ReadBytes,
-				ReceivedFormat: FormatBytes(counter.ReadBytes),
-				SentBytes:      counter.WriteBytes,
-				SentFormat:     FormatBytes(counter.WriteBytes),
+				ReceivedBytes:  readBytes,
+				ReceivedFormat: FormatBytes(readBytes),
+				SentBytes:      writeBytes,
+				SentFormat:     FormatBytes(writeBytes),
 			})
 		}
 	}
@@ -281,6 +292,16 @@ func CreateDownloadClient() *http.Client {
 }
 
 func CreateConnCounterClient() (*http.Client, error) {
+	transport := createConnCounterTransport(proxy.ApplyInfoProxyToTransport)
+	return &http.Client{Transport: transport}, nil
+}
+
+func CreateConnCounterDownloadClient() *http.Client {
+	transport := createConnCounterTransport(proxy.ApplyDownloadProxyToTransport)
+	return &http.Client{Transport: transport}
+}
+
+func createConnCounterTransport(applyProxy func(*http.Transport)) *http.Transport {
 	dialer := &net.Dialer{
 		Timeout: 10 * time.Second,
 	}
@@ -304,8 +325,10 @@ func CreateConnCounterClient() (*http.Client, error) {
 	// Use "tls:" prefix to distinguish from plain connections
 	transport.DialTLSContext = createTLSDialer(dialer, true, "tls:")
 
-	// 应用信息获取代理（这些客户端主要用于获取直播间信息等 API 请求）
-	proxy.ApplyInfoProxyToTransport(transport)
+	// Apply the caller-selected proxy to the counter transport.
+	if applyProxy != nil {
+		applyProxy(transport)
+	}
 
-	return &http.Client{Transport: transport}, nil
+	return transport
 }

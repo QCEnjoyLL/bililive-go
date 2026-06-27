@@ -25,14 +25,18 @@
     align-items: center;
     justify-content: center;
     min-height: 300px;
-    color: #999;
-    background-color: #fafafa;
+    color: var(--bgo-muted);
+    background-color: var(--bgo-elevated-bg);
     border-radius: 8px;
-    border: 1px dashed #d9d9d9;
+    border: 1px dashed var(--bgo-border);
 }
 
 .chart-empty p {
     margin: 8px 0;
+}
+
+.chart-empty p:last-child {
+    color: var(--bgo-muted) !important;
 }
 
 /* 时间线图表 */

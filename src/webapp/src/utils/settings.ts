@@ -11,11 +11,50 @@ export interface LocalSettings {
   enableListSSE: boolean;
   // SSE 更新的轮询间隔（秒），当禁用 SSE 时使用 REST API 轮询
   pollIntervalSeconds: number;
+  // WebUI 主题模式
+  themeMode: ThemeMode;
+  // WebUI 配色方案
+  themePalette: ThemePalette;
 }
+
+export type ThemeMode = 'system' | 'light' | 'dark';
+export type ResolvedThemeMode = 'light' | 'dark';
+export const THEME_PALETTE_KEYS = [
+  'one',
+  'absolutely',
+  'ayu',
+  'catppuccin',
+  'codex',
+  'dracula',
+  'everforest',
+  'github',
+  'gruvbox',
+  'linear',
+  'lobster',
+  'material',
+  'matrix',
+  'monokai',
+  'night-owl',
+  'nord',
+  'notion',
+  'oscurance',
+  'raycast',
+  'rose-pine',
+  'sentry',
+  'solarized',
+  'temple',
+  'tokyo-night',
+  'vercel',
+  'vs-code-plus',
+  'xcode',
+] as const;
+export type ThemePalette = (typeof THEME_PALETTE_KEYS)[number];
 
 const DEFAULT_SETTINGS: LocalSettings = {
   enableListSSE: true,
   pollIntervalSeconds: 180, // 3分钟
+  themeMode: 'system',
+  themePalette: 'one',
 };
 
 /**
@@ -68,4 +107,34 @@ export function setListSSEEnabled(enabled: boolean): void {
  */
 export function getPollIntervalMs(): number {
   return getLocalSettings().pollIntervalSeconds * 1000;
+}
+
+/**
+ * 获取 WebUI 主题模式
+ */
+export function getThemeMode(): ThemeMode {
+  const mode = getLocalSettings().themeMode;
+  return mode === 'dark' || mode === 'light' || mode === 'system' ? mode : 'system';
+}
+
+/**
+ * 设置 WebUI 主题模式
+ */
+export function setThemeMode(mode: ThemeMode): void {
+  saveLocalSettings({ themeMode: mode });
+}
+
+/**
+ * 获取 WebUI 配色方案
+ */
+export function getThemePalette(): ThemePalette {
+  const palette = getLocalSettings().themePalette;
+  return THEME_PALETTE_KEYS.includes(palette as ThemePalette) ? palette as ThemePalette : 'one';
+}
+
+/**
+ * 设置 WebUI 配色方案
+ */
+export function setThemePalette(palette: ThemePalette): void {
+  saveLocalSettings({ themePalette: palette });
 }

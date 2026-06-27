@@ -282,3 +282,21 @@ func TestCreateConnCounterClient(t *testing.T) {
 	assert.Greater(t, transport.TLSHandshakeTimeout.Seconds(), 0.0)
 	assert.Greater(t, transport.ResponseHeaderTimeout.Seconds(), 0.0)
 }
+
+func TestCreateConnCounterDownloadClient(t *testing.T) {
+	client := CreateConnCounterDownloadClient()
+
+	assert.NotNil(t, client)
+	assert.NotNil(t, client.Transport)
+
+	transport, ok := client.Transport.(*http.Transport)
+	assert.True(t, ok, "Transport should be *http.Transport")
+
+	assert.NotNil(t, transport.DialContext)
+	assert.NotNil(t, transport.DialTLSContext)
+	assert.Equal(t, 100, transport.MaxIdleConns)
+	assert.Equal(t, 10, transport.MaxIdleConnsPerHost)
+	assert.Greater(t, transport.IdleConnTimeout.Seconds(), 0.0)
+	assert.Greater(t, transport.TLSHandshakeTimeout.Seconds(), 0.0)
+	assert.Greater(t, transport.ResponseHeaderTimeout.Seconds(), 0.0)
+}

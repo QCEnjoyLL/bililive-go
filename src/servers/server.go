@@ -4,7 +4,6 @@ import (
 	"context"
 	"net"
 	"net/http"
-	"net/http/httputil"
 	_ "net/http/pprof"
 	"net/url"
 	"strconv"
@@ -218,7 +217,7 @@ func initMux(ctx context.Context) *mux.Router {
 				}
 				lastPort = port
 				target, _ := url.Parse("http://localhost:" + strconv.Itoa(port))
-				proxy := httputil.NewSingleHostReverseProxy(target)
+				proxy := newExternalThemeReverseProxy(target)
 				// 可选：当下游未就绪时给出明确错误
 				proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
 					http.Error(w, "无法连接到 Tools Web UI: "+err.Error(), http.StatusBadGateway)
@@ -272,7 +271,7 @@ func initMux(ctx context.Context) *mux.Router {
 				}
 				lastPort = port
 				target, _ := url.Parse("http://localhost:" + strconv.Itoa(port))
-				proxy := httputil.NewSingleHostReverseProxy(target)
+				proxy := newExternalThemeReverseProxy(target)
 				proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
 					http.Error(w, "无法连接到 Scheduler Web UI: "+err.Error(), http.StatusBadGateway)
 				}

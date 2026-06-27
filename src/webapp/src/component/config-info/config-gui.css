@@ -3,15 +3,16 @@
 /* 设置页面容器 */
 .config-gui-container {
   padding: 0;
-  background: #f5f5f5;
+  background: var(--bgo-page-bg);
   min-height: 100%;
+  color: var(--bgo-text);
 }
 
 /* 设置页面头部 */
 .config-gui-header {
   padding: 16px 24px;
-  background-color: #fff;
-  border-bottom: 1px solid #e8e8e8;
+  background-color: var(--bgo-panel-bg);
+  border-bottom: 1px solid var(--bgo-border);
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -20,26 +21,28 @@
 .config-gui-title {
   font-size: 20px;
   font-weight: 600;
-  color: rgba(0, 0, 0, 0.85);
+  color: var(--bgo-text);
   margin-right: 12px;
 }
 
 .config-gui-subtitle {
   font-size: 14px;
-  color: rgba(0, 0, 0, 0.45);
+  color: var(--bgo-muted);
 }
 
 /* 模式切换标签 */
 .config-mode-tabs {
   margin-bottom: 0;
+  background: var(--bgo-page-bg);
 }
 
 /* 设置内容区域 */
 .config-content {
   padding: 16px;
-  background: #fff;
+  background: var(--bgo-panel-bg);
   margin: 16px;
   border-radius: 4px;
+  color: var(--bgo-text);
 }
 
 /* 设置分组 */
@@ -50,10 +53,10 @@
 .config-section-title {
   font-size: 16px;
   font-weight: 600;
-  color: rgba(0, 0, 0, 0.85);
+  color: var(--bgo-text);
   margin-bottom: 16px;
   padding-bottom: 8px;
-  border-bottom: 1px solid #e8e8e8;
+  border-bottom: 1px solid var(--bgo-border);
 }
 
 /* 设置项样式 */
@@ -61,7 +64,7 @@
   display: flex;
   align-items: flex-start;
   padding: 12px 0;
-  border-bottom: 1px solid #f0f0f0;
+  border-bottom: 1px solid var(--bgo-border);
 }
 
 .config-item:last-child {
@@ -72,7 +75,7 @@
   width: 200px;
   flex-shrink: 0;
   font-weight: 500;
-  color: rgba(0, 0, 0, 0.85);
+  color: var(--bgo-text);
   padding-top: 4px;
 }
 
@@ -89,19 +92,20 @@
 
 .config-item-description {
   font-size: 12px;
-  color: rgba(0, 0, 0, 0.45);
+  color: var(--bgo-muted);
 }
 
 /* 实际生效值显示 */
 .config-effective-value {
   font-size: 12px;
-  color: #1890ff;
-  background: #e6f7ff;
+  color: var(--bgo-accent-hover);
+  background: var(--bgo-accent-soft);
   padding: 2px 8px;
   border-radius: 4px;
   display: inline-flex;
   align-items: center;
   gap: 4px;
+  border: 1px solid color-mix(in srgb, var(--bgo-accent) 26%, transparent);
 }
 
 /* 继承标识 */
@@ -127,9 +131,9 @@
 
 /* 移除未读红点样式，改用更柔和的数字显示 */
 .ant-badge-count {
-  background: #f0f0f0 !important;
-  color: rgba(0, 0, 0, 0.45) !important;
-  box-shadow: 0 0 0 1px #d9d9d9 inset !important;
+  background: var(--bgo-elevated-bg) !important;
+  color: var(--bgo-muted) !important;
+  box-shadow: 0 0 0 1px var(--bgo-border) inset !important;
   min-width: 16px;
   height: 16px;
   line-height: 16px;
@@ -160,9 +164,9 @@
 }
 
 .inheritance-indicator.default {
-  background: #f0f0f0;
-  color: rgba(0, 0, 0, 0.65);
-  border: 1px solid #d9d9d9;
+  background: var(--bgo-elevated-bg);
+  color: var(--bgo-muted);
+  border: 1px solid var(--bgo-border);
 }
 
 .inheritance-indicator-link {
@@ -177,9 +181,10 @@
 /* 平台设置卡片 */
 .platform-card {
   margin-bottom: 16px;
-  border: 1px solid #e8e8e8;
+  border: 1px solid var(--bgo-border);
   border-radius: 8px;
   overflow: hidden;
+  background: var(--bgo-panel-bg);
 }
 
 .platform-card-header {
@@ -187,13 +192,13 @@
   justify-content: space-between;
   align-items: center;
   padding: 12px 16px;
-  background: #fafafa;
-  border-bottom: 1px solid #e8e8e8;
+  background: var(--bgo-elevated-bg);
+  border-bottom: 1px solid var(--bgo-border);
   cursor: pointer;
 }
 
 .platform-card-header:hover {
-  background: #f0f0f0;
+  background: var(--bgo-header-hover);
 }
 
 .platform-card-title {
@@ -209,7 +214,7 @@
 
 .platform-room-count {
   font-size: 12px;
-  color: rgba(0, 0, 0, 0.45);
+  color: var(--bgo-muted);
 }
 
 .platform-card-body {
@@ -223,7 +228,7 @@
   justify-content: space-between;
   padding: 8px 12px;
   border-radius: 4px;
-  background: #fafafa;
+  background: var(--bgo-elevated-bg);
   margin-bottom: 8px;
 }
 
@@ -232,7 +237,7 @@
 }
 
 .room-list-item:hover {
-  background: #f0f0f0;
+  background: var(--bgo-header-hover);
 }
 
 .room-list-item-info {
@@ -247,24 +252,25 @@
 
 .room-list-item-url {
   font-size: 12px;
-  color: rgba(0, 0, 0, 0.45);
+  color: var(--bgo-muted);
 }
 
 .room-list-item-link {
   cursor: pointer;
-  color: #1890ff;
+  color: var(--bgo-accent);
 }
 
 .room-list-item-link:hover {
-  color: #40a9ff;
+  color: var(--bgo-accent-hover);
 }
 
 /* 通知服务设置 */
 .notify-section {
-  background: #fafafa;
+  background: var(--bgo-elevated-bg);
   padding: 16px;
   border-radius: 8px;
   margin-bottom: 16px;
+  border: 1px solid var(--bgo-border);
 }
 
 .notify-section-title {
@@ -298,8 +304,8 @@
 
 /* 左侧导航样式 */
 .config-nav-menu {
-  background: #fff;
-  border-right: 1px solid #e8e8e8;
+  background: var(--bgo-panel-bg);
+  border-right: 1px solid var(--bgo-border);
   height: 100%;
 }
 
@@ -316,7 +322,7 @@
 .config-empty-state {
   text-align: center;
   padding: 48px;
-  color: rgba(0, 0, 0, 0.45);
+  color: var(--bgo-muted);
 }
 
 /* 加载状态 */
@@ -348,4 +354,138 @@
 .config-item-highlight {
   animation: highlight-fade 2s ease-out;
   border-radius: 4px;
+}
+
+.config-gui-container .ant-tabs {
+  color: var(--bgo-text);
+}
+
+.config-gui-container .ant-tabs-nav {
+  background: var(--bgo-page-bg);
+  margin-bottom: 0 !important;
+}
+
+.config-gui-container .ant-tabs-content-holder {
+  background: var(--bgo-page-bg) !important;
+  border-color: var(--bgo-border) !important;
+}
+
+.config-gui-container .ant-tabs-tab {
+  color: var(--bgo-muted) !important;
+}
+
+.config-gui-container .ant-tabs-tab:hover,
+.config-gui-container .ant-tabs-tab-active .ant-tabs-tab-btn {
+  color: var(--bgo-accent-hover) !important;
+}
+
+.config-gui-container .ant-tabs-card > .ant-tabs-nav .ant-tabs-tab {
+  background: var(--bgo-elevated-bg) !important;
+  border-color: var(--bgo-border) !important;
+}
+
+.config-gui-container .ant-tabs-card > .ant-tabs-nav .ant-tabs-tab-active {
+  background: var(--bgo-panel-bg) !important;
+  border-bottom-color: var(--bgo-panel-bg) !important;
+}
+
+.config-gui-container .ant-tabs-left > .ant-tabs-nav {
+  background: var(--bgo-panel-bg);
+  border-right: 1px solid var(--bgo-border);
+}
+
+.config-gui-container .ant-tabs-left > .ant-tabs-nav .ant-tabs-tab {
+  margin: 0 !important;
+  padding: 14px 20px !important;
+  background: transparent !important;
+}
+
+.config-gui-container .ant-tabs-left > .ant-tabs-nav .ant-tabs-tab-active {
+  background: var(--bgo-selected-bg) !important;
+}
+
+.config-gui-container .ant-card,
+.config-gui-container .ant-card-head,
+.config-gui-container .ant-card-body,
+.config-gui-container .ant-collapse,
+.config-gui-container .ant-collapse-item,
+.config-gui-container .ant-collapse-content,
+.config-gui-container .ant-list,
+.config-gui-container .ant-list-item {
+  background: var(--bgo-panel-bg) !important;
+  border-color: var(--bgo-border) !important;
+  color: var(--bgo-text);
+}
+
+.config-gui-container .ant-card-head {
+  background: var(--bgo-elevated-bg) !important;
+}
+
+.config-gui-container .ant-card-head-title,
+.config-gui-container .ant-collapse-header,
+.config-gui-container .ant-form-item-label > label,
+.config-gui-container .ant-form-item,
+.config-gui-container .ant-radio-wrapper,
+.config-gui-container .ant-checkbox-wrapper {
+  color: var(--bgo-text) !important;
+}
+
+.config-gui-container .ant-input,
+.config-gui-container .ant-input-number,
+.config-gui-container .ant-input-number-input,
+.config-gui-container .ant-select-selector,
+.config-gui-container textarea {
+  background: var(--bgo-elevated-bg) !important;
+  border-color: var(--bgo-border) !important;
+  color: var(--bgo-text) !important;
+}
+
+.config-gui-container .ant-input::placeholder,
+.config-gui-container textarea::placeholder {
+  color: var(--bgo-muted) !important;
+}
+
+.config-gui-container .ant-input[disabled],
+.config-gui-container .ant-input-number-disabled,
+.config-gui-container .ant-select-disabled .ant-select-selector {
+  background: color-mix(in srgb, var(--bgo-elevated-bg) 70%, transparent) !important;
+  color: var(--bgo-muted) !important;
+}
+
+html[data-bgo-theme='dark'] .config-gui-container {
+  background: var(--bgo-page-bg);
+}
+
+html[data-bgo-theme='dark'] .config-gui-container .config-content {
+  border: 1px solid var(--bgo-border);
+}
+
+html[data-bgo-theme='dark'] .config-gui-container .inheritance-indicator.global {
+  background: color-mix(in srgb, #52c41a 18%, var(--bgo-panel-bg));
+}
+
+html[data-bgo-theme='dark'] .config-gui-container .inheritance-indicator.platform {
+  background: color-mix(in srgb, #fa8c16 18%, var(--bgo-panel-bg));
+}
+
+html[data-bgo-theme='dark'] .config-gui-container .inheritance-indicator.room {
+  background: color-mix(in srgb, var(--bgo-accent) 18%, var(--bgo-panel-bg));
+}
+
+html[data-bgo-theme='dark'] .config-gui-container .config-effective-value {
+  color: color-mix(in srgb, var(--bgo-accent-hover) 82%, #ffffff);
+  background: color-mix(in srgb, var(--bgo-accent) 20%, var(--bgo-panel-bg));
+}
+
+html[data-bgo-theme='dark'] .config-gui-container [style*="backgroundColor: #f0f0f0"],
+html[data-bgo-theme='dark'] .config-gui-container [style*="background-color: #f0f0f0"],
+html[data-bgo-theme='dark'] .config-gui-container [style*="background: #f0f0f0"] {
+  background: var(--bgo-elevated-bg) !important;
+  background-color: var(--bgo-elevated-bg) !important;
+}
+
+html[data-bgo-theme='dark'] .config-gui-container [style*="color: '#999'"],
+html[data-bgo-theme='dark'] .config-gui-container [style*="color: #999"],
+html[data-bgo-theme='dark'] .config-gui-container [style*="color:#999"] {
+  color: var(--bgo-muted) !important;
 }

@@ -134,7 +134,8 @@ func (p *Parser) ParseLiveStream(ctx context.Context, streamUrlInfo *live.Stream
 	if modelID == "" {
 		return fmt.Errorf("hlsmouflon: 无法从 %s 解析 modelId", streamUrlInfo.Url)
 	}
-	p.hc = &http.Client{Timeout: 15 * time.Second}
+	p.hc = utils.CreateConnCounterDownloadClient()
+	p.hc.Timeout = 15 * time.Second
 
 	// 1) master → 变体地址
 	master := fmt.Sprintf("https://%s/hls/%s/master/%s.m3u8", masterHost, modelID, modelID)
