@@ -22,6 +22,16 @@ func TestRPC_Verify(t *testing.T) {
 	assert.NoError(t, rpc.verify())
 	rpc.Enable = true
 	assert.Error(t, rpc.verify())
+	rpc.Bind = ":8080"
+	rpc.Auth.Enable = true
+	rpc.Auth.Username = ""
+	rpc.Auth.Password = "secret"
+	assert.Error(t, rpc.verify())
+	rpc.Auth.Username = "admin"
+	rpc.Auth.Password = ""
+	assert.Error(t, rpc.verify())
+	rpc.Auth.Password = "secret"
+	assert.NoError(t, rpc.verify())
 }
 
 func TestConfig_Verify(t *testing.T) {

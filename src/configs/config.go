@@ -20,15 +20,23 @@ import (
 
 // RPC info.
 type RPC struct {
-	Enable bool   `yaml:"enable" json:"enable"`
-	Bind   string `yaml:"bind" json:"bind"`
+	Enable bool    `yaml:"enable" json:"enable"`
+	Bind   string  `yaml:"bind" json:"bind"`
+	Auth   RPCAuth `yaml:"auth" json:"auth"`
 	// SSE 配置
 	SSEListThreshold int `yaml:"sse_list_threshold" json:"sse_list_threshold"` // 监控列表超过此阈值时仅为详情页启用SSE
+}
+
+type RPCAuth struct {
+	Enable   bool   `yaml:"enable" json:"enable"`
+	Username string `yaml:"username" json:"username"`
+	Password string `yaml:"password" json:"password"`
 }
 
 var defaultRPC = RPC{
 	Enable:           true,
 	Bind:             ":8080",
+	Auth:             RPCAuth{Username: "admin"},
 	SSEListThreshold: 50, // 默认50个直播间
 }
 
@@ -41,6 +49,14 @@ func (r *RPC) verify() error {
 	}
 	if _, err := net.ResolveTCPAddr("tcp", r.Bind); err != nil {
 		return fmt.Errorf("无效的RPC绑定地址: %w", err)
+	}
+	if r.Auth.Enable {
+		if strings.TrimSpace(r.Auth.Username) == "" {
+			return fmt.Errorf("RPC 鉴权用户名不能为空")
+		}
+		if r.Auth.Password == "" {
+			return fmt.Errorf("RPC 鉴权密码不能为空")
+		}
 	}
 	return nil
 }

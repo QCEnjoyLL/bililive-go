@@ -2,12 +2,14 @@ package servers
 
 import (
 	"context"
+	"crypto/subtle"
 	"net"
 	"net/http"
 	"net/http/httputil"
 	_ "net/http/pprof"
 	"net/url"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -65,6 +67,7 @@ func initMux(ctx context.Context) *mux.Router {
 			)
 		})
 	} /* , log */)
+	m.Use(basicAuthMiddleware(configs.GetCurrentConfig().RPC.Auth))
 
 	// api router
 	apiRoute := m.PathPrefix(apiRouterPrefix).Subrouter()
@@ -91,8 +94,8 @@ func initMux(ctx context.Context) *mux.Router {
 	apiRoute.HandleFunc("/lives/{id}/name-history", getLiveNameHistory).Methods("GET")   // 获取名称变更历史
 	apiRoute.HandleFunc("/lives/{id}/history", getLiveHistory).Methods("GET")            // 获取统一历史事件（支持分页筛选）
 	apiRoute.HandleFunc("/lives/{id}/switchStream", switchStreamHandler).Methods("POST") // 切换流设置（需要请求体，必须在通配符之前）
-	apiRoute.HandleFunc("/lives/{id}/startRecord", startRecordDirect).Methods("POST")   // 直接启动录制（适用于 NotifyOnly 房间）
-	apiRoute.HandleFunc("/lives/{id}/stopRecord", stopRecordDirect).Methods("POST")     // 直接停止录制
+	apiRoute.HandleFunc("/lives/{id}/startRecord", startRecordDirect).Methods("POST")    // 直接启动录制（适用于 NotifyOnly 房间）
+	apiRoute.HandleFunc("/lives/{id}/stopRecord", stopRecordDirect).Methods("POST")      // 直接停止录制
 	apiRoute.HandleFunc("/lives/{id}/{action}", parseLiveAction).Methods("GET")          // 通配符路由必须放在最后
 	apiRoute.HandleFunc("/file/{path:.*}", getFileInfo).Methods("GET")
 	apiRoute.HandleFunc("/file/{path:.*}", renameFile).Methods("PUT")
@@ -293,6 +296,48 @@ func initMux(ctx context.Context) *mux.Router {
 	return m
 }
 
+func basicAuthMiddleware(auth configs.RPCAuth) mux.MiddlewareFunc {
+	if !auth.Enable {
+		return func(next http.Handler) http.Handler { return next }
+	}
+	username := auth.Username
+	password := auth.Password
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			user, pass, ok := r.BasicAuth()
+			userOK := subtle.ConstantTimeCompare([]byte(user), []byte(username)) == 1
+			passOK := subtle.ConstantTimeCompare([]byte(pass), []byte(password)) == 1
+			if !ok || !userOK || !passOK {
+				w.Header().Set("WWW-Authenticate", `Basic realm="BiliLive-go WebUI", charset="UTF-8"`)
+				http.Error(w, "需要登录后访问 BiliLive-go WebUI", http.StatusUnauthorized)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+func isPublicRPCBind(bind string) bool {
+	if strings.TrimSpace(bind) == "" {
+		return true
+	}
+	host, _, err := net.SplitHostPort(bind)
+	if err != nil {
+		host, _, err = net.SplitHostPort(":" + bind)
+		if err != nil {
+			return false
+		}
+	}
+	if host == "" || host == "0.0.0.0" || host == "::" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return false
+	}
+	return !ip.IsLoopback()
+}
+
 func CORSMiddleware(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
@@ -305,6 +350,9 @@ func CORSMiddleware(h http.Handler) http.Handler {
 func NewServer(ctx context.Context) *Server {
 	inst := instance.GetInstance(ctx)
 	config := configs.GetCurrentConfig()
+	if config.RPC.Enable && isPublicRPCBind(config.RPC.Bind) && !config.RPC.Auth.Enable {
+		applog.GetLogger().Warnf("安全提醒：WebUI 正在监听公开地址 %s，且未开启 rpc.auth；如果端口暴露到公网，任何人都可能访问配置、文件和更新接口", config.RPC.Bind)
+	}
 	httpServer := &http.Server{
 		Addr:    config.RPC.Bind,
 		Handler: initMux(ctx),
@@ -360,15 +408,15 @@ func setupRecorderStatusBroadcast() {
 	// 设置弹幕广播回调，让 recorders 包能够将弹幕消息推送到 SSE
 	recorders.SetBroadcastDanmakuFunc(func(liveId types.LiveID, msgType, username, content string, extra map[string]interface{}) {
 		GetSSEHub().BroadcastDanmaku(liveId, map[string]interface{}{
-			"type":       msgType,
-			"username":   username,
-			"content":    content,
-			"color":      extra["color"],
-			"timestamp":  extra["timestamp"],
-			"gift_name":  extra["gift_name"],
-			"num":        extra["num"],
-			"price":      extra["price"],
-			"coin_type":  extra["coin_type"],
+			"type":      msgType,
+			"username":  username,
+			"content":   content,
+			"color":     extra["color"],
+			"timestamp": extra["timestamp"],
+			"gift_name": extra["gift_name"],
+			"num":       extra["num"],
+			"price":     extra["price"],
+			"coin_type": extra["coin_type"],
 		})
 	})
 

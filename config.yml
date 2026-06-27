@@ -1,8 +1,19 @@
 # 这个配置文件内的注释是自动生成的，请不要手动修改。
 # 需要修改注释时，请在 src/configs/config_comments.go 文件内修改。
+# WebUI / API 服务配置
 rpc:
   enable: true
+  # WebUI 监听地址。":8080" 表示监听所有网卡；"127.0.0.1:8080" 表示仅本机可访问。
+  # Docker 若需要从宿主机访问，容器内通常仍使用 ":8080"，并通过 -p 127.0.0.1:8080:8080 限制宿主机暴露范围。
   bind: :8080
+  auth:
+    # WebUI / API Basic Auth 鉴权开关。
+    # 如果 WebUI 会被局域网或公网访问，建议开启并设置强密码。
+    enable: false
+    # 登录用户名
+    username: admin
+    # 登录密码；开启鉴权时不能为空
+    password: ""
   sse_list_threshold: 50
 debug: false
 interval: 20

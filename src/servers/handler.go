@@ -1392,6 +1392,17 @@ func applyConfigUpdates(c *configs.Config, updates map[string]interface{}) error
 		if bind, ok := rpc["bind"].(string); ok {
 			c.RPC.Bind = bind
 		}
+		if auth, ok := rpc["auth"].(map[string]interface{}); ok {
+			if enable, ok := auth["enable"].(bool); ok {
+				c.RPC.Auth.Enable = enable
+			}
+			if username, ok := auth["username"].(string); ok {
+				c.RPC.Auth.Username = username
+			}
+			if password, ok := auth["password"].(string); ok {
+				c.RPC.Auth.Password = password
+			}
+		}
 	}
 
 	// 处理基本配置

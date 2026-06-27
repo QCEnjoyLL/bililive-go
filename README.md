@@ -192,8 +192,10 @@ https://github.com/bililive-go/bililive-go/wiki/Install-Linux
 
 例如：
 ```
-docker run --restart=always -v ~/config.yml:/etc/bililive-go/config.yml -v ~/Videos:/srv/bililive -p 8080:8080 -d orangeqiu/bililive-go
+docker run --restart=always -v ~/config.yml:/etc/bililive-go/config.yml -v ~/Videos:/srv/bililive -p 127.0.0.1:8080:8080 -d orangeqiu/bililive-go
 ```
+
+上面的端口映射只允许宿主机本机访问 WebUI。若需要从局域网或公网访问，请先在 `config.yml` 中开启 `rpc.auth` 并设置强密码，再按实际网络环境开放端口；不要在未开启鉴权时把 8080 直接暴露到公网。
 
 ### docker compose
 

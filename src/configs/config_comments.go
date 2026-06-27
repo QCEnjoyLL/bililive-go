@@ -17,6 +17,22 @@ func DecorateConfigNode(node *yaml.Node) {
 
 	setFieldLineComment(root, "ffmpeg_path", "# 如果此项为空，就自动在环境变量里寻找")
 
+	setFieldHeadComment(root, "rpc", "# WebUI / API 服务配置")
+	rpcNode := findNode(root, "rpc")
+	if rpcNode != nil {
+		setFieldComment(rpcNode, "bind",
+			`# WebUI 监听地址。":8080" 表示监听所有网卡；"127.0.0.1:8080" 表示仅本机可访问。
+# Docker 若需要从宿主机访问，容器内通常仍使用 ":8080"，并通过 -p 127.0.0.1:8080:8080 限制宿主机暴露范围。`, "")
+		authNode := findNode(rpcNode, "auth")
+		if authNode != nil {
+			setFieldComment(authNode, "enable",
+				`# WebUI / API Basic Auth 鉴权开关。
+# 如果 WebUI 会被局域网或公网访问，建议开启并设置强密码。`, "")
+			setFieldComment(authNode, "username", "# 登录用户名", "")
+			setFieldComment(authNode, "password", "# 登录密码；开启鉴权时不能为空", "")
+		}
+	}
+
 	setFieldComment(root, "out_put_tmpl",
 		`# '{{ .Live.GetPlatformCNName }}/{{ .HostName | filenameFilter }}/[{{ now | date "2006-01-02 15-04-05"}}][{{ .HostName | filenameFilter }}][{{ .RoomName | filenameFilter }}].flv'
 # ./平台名称/主播名字/[时间戳][主播名字][房间名字].flv

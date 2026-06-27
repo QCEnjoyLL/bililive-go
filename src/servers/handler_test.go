@@ -2,6 +2,7 @@ package servers
 
 import (
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
 	"testing"
 
@@ -31,4 +32,27 @@ func TestGetSoopLiveAuthConfigDoesNotExposeSavedPassword(t *testing.T) {
 	assert.Equal(t, true, data["has_saved_credentials"])
 	_, exists := data["password"]
 	assert.False(t, exists)
+}
+
+func TestBasicAuthMiddleware(t *testing.T) {
+	auth := configs.RPCAuth{
+		Enable:   true,
+		Username: "admin",
+		Password: "secret",
+	}
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+	handler := basicAuthMiddleware(auth)(next)
+
+	unauthorized := httptest.NewRecorder()
+	handler.ServeHTTP(unauthorized, httptest.NewRequest(http.MethodGet, "/", nil))
+	assert.Equal(t, http.StatusUnauthorized, unauthorized.Code)
+	assert.Contains(t, unauthorized.Header().Get("WWW-Authenticate"), "Basic")
+
+	authorized := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.SetBasicAuth("admin", "secret")
+	handler.ServeHTTP(authorized, req)
+	assert.Equal(t, http.StatusNoContent, authorized.Code)
 }
