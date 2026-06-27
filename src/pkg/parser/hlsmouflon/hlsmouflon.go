@@ -58,19 +58,25 @@ const (
 	defaultPkey         = "1Dzcc6OjP73LKbtI"
 	defaultKeystreamHex = "334eff75462ef6a610704bc3d3e7445f"
 
-	pollInterval = 250 * time.Millisecond
+	pollInterval = 500 * time.Millisecond
 	startupTO    = 40 * time.Second // 启动期一直拿不到有效分段则判定未开播/密钥失效
 
 	// 下播判定：区分"网络抖动暂时无新段"与"真下播"。只要 playlist 仍能拉到就认为在播，
 	// 不因短暂无新段误判（避免误判下播 → recorder 5s 后重录、切出多个短文件）。
-	offlineFetchFail = 6               // playlist 连续拉取失败次数（~9s）→ 判定真下播（房间结束/变体消失）
-	mediaStuckTO     = 3 * time.Minute // playlist 仍可拉但超此时长无任何新分段 → 兜底判定卡死下播
-	targetDisableTO  = 1 * time.Minute // CDN 不支持 _HLS_msn、超时或长期不命中时，临时退回普通 playlist
+	offlineFetchFail    = 6               // playlist 连续拉取失败次数（~9s）→ 判定真下播（房间结束/变体消失）
+	mediaStuckTO        = 3 * time.Minute // playlist 仍可拉但超此时长无任何新分段 → 兜底判定卡死下播
+	targetDisableTO     = 1 * time.Minute // CDN 不支持 _HLS_msn、超时或长期不命中时，临时退回普通 playlist
+	playlistRequestTO   = 4 * time.Second // playlist 探测不能长时间拖住短滑窗调度
+	normalProbeInflight = 1
+	targetProbeInterval = 300 * time.Millisecond
+	targetProbeInflight = 0
+	playlistLoopIdle    = 50 * time.Millisecond
 )
 
 // segRe 匹配分段文件名 {id}_{msn}_{hash}_{ts}(_partN).mp4，提取 hash。
-var segRe = regexp.MustCompile(`_\d+_([A-Za-z0-9]+)_\d+(?:_part\d+)?\.mp4`)
-var segPartRe = regexp.MustCompile(`_(\d+)_([A-Za-z0-9]+)_\d+(?:_part(\d+))?\.mp4`)
+// MOUFLON hash 是 base64 风格字符串，可能包含 +、-、_ 等非字母数字字符。
+var segRe = regexp.MustCompile(`_\d+_(.+)_\d+(?:_part\d+)?\.mp4`)
+var segPartRe = regexp.MustCompile(`_(\d+)_(.+)_\d+(?:_part(\d+))?\.mp4`)
 var mapRe = regexp.MustCompile(`#EXT-X-MAP:URI="([^"]+)"`)
 
 func init() { parser.Register(Name, new(builder)) }
@@ -162,30 +168,79 @@ func (p *Parser) ParseLiveStream(ctx context.Context, streamUrlInfo *live.Stream
 	p.mu.Lock()
 	p.cmd, p.stdin, p.outFile = cmd, stdin, file
 	p.mu.Unlock()
-	defer p.cleanup()
 
 	p.logger.Infof("hlsmouflon 开始录制 model=%s -> %s", modelID, file)
 
 	// 3) 轮询 playlist 发现分段；下载、重试和顺序写入交给调度器。
 	sched := newHLSSegmentScheduler(ctx, p.get)
 	defer sched.stop()
+	writeCh := make(chan []byte, 128)
+	writeDone := make(chan struct{})
+	var writeMu sync.Mutex
+	var writeBlocked int
+	var maxWriteMs int
+	go func() {
+		defer close(writeDone)
+		for b := range writeCh {
+			t0 := time.Now()
+			p.writeSeg(b)
+			elapsed := int(time.Since(t0).Milliseconds())
+			writeMu.Lock()
+			if elapsed > maxWriteMs {
+				maxWriteMs = elapsed
+			}
+			writeMu.Unlock()
+		}
+	}()
+	enqueueWrite := func(b []byte) {
+		select {
+		case writeCh <- b:
+		default:
+			writeMu.Lock()
+			writeBlocked++
+			writeMu.Unlock()
+			writeCh <- b
+		}
+	}
+	snapshotWrites := func(reset bool) (int, int, int) {
+		writeMu.Lock()
+		blocked, maxMs := writeBlocked, maxWriteMs
+		if reset {
+			writeBlocked, maxWriteMs = 0, 0
+		}
+		writeMu.Unlock()
+		return len(writeCh), blocked, maxMs
+	}
+	probeCtx, cancelProbes := context.WithCancel(ctx)
+	defer cancelProbes()
+	normalResults := make(chan hlsPlaylistResult, 64)
+	targetResults := make(chan hlsPlaylistResult, 64)
+	var normalInflight int
+	targetInflight := map[int]bool{}
+	var lastNormalProbe time.Time
+	var lastTargetProbe time.Time
 	initDone := false
 	lastData := time.Now()
 	started := false
 	start := time.Now()
 	var decFail int
 	triedBootstrap := false
-	var fetchFail int // playlist 连续拉取失败计数（区分真下播 vs 网络抖动）
+	var fetchFail int // 普通 playlist 连续拉取失败计数（区分真下播 vs 网络抖动）
 	var lastDiagGaps int
 	var targetFailures int
 	var targetRequests int
 	var targetFallbacks int
 	var targetHits int
 	var targetMisses int
+	var targetPending int
 	var targetMissStreak int
 	var targetDisabledUntil time.Time
 	var playlistFullRefs int
 	var playlistPartRefs int
+	var normalRequests int
+	var normalFailures int
+	var normalEmpty int
+	var normalMaxMs int
 	var lastDiagWritten int
 	var lastDiagPlaylistMSN int
 	var lastDiagWriteWaits int
@@ -198,13 +253,22 @@ func (p *Parser) ParseLiveStream(ctx context.Context, streamUrlInfo *live.Stream
 			writable = sched.takeWritable(time.Now())
 		}
 		for _, seg := range writable {
-			p.writeSeg(seg.body)
+			enqueueWrite(seg.body)
 			started = true
 			decFail = 0
 			lastData = time.Now()
 		}
 	}
-	defer flushWritable(true)
+	defer func() {
+		flushWritable(true)
+		close(writeCh)
+		select {
+		case <-writeDone:
+		case <-time.After(15 * time.Second):
+			p.logger.Warnf("hlsmouflon: 等待 ffmpeg 写入队列排空超时，强制收尾")
+		}
+		p.cleanup()
+	}()
 
 	for {
 		select {
@@ -217,68 +281,172 @@ func (p *Parser) ParseLiveStream(ctx context.Context, streamUrlInfo *live.Stream
 		default:
 		}
 
-		requestPlaylist := playlist
-		targetMSN := 0
-		if started && time.Now().After(targetDisabledUntil) {
-			targetMSN = sched.nextRequestMSN()
-			if targetMSN > 0 {
-				requestPlaylist = buildMouflonPlaylistURL(variant, p.pkey, targetMSN)
-				targetRequests++
+		now := time.Now()
+		processPlaylistResult := func(result hlsPlaylistResult) {
+			if result.request.targetMSN > 0 {
+				delete(targetInflight, result.request.targetMSN)
+			} else if normalInflight > 0 {
+				normalInflight--
 			}
-		}
-		targetRequestFailed := false
-		body, err := p.getPlaylist(requestPlaylist)
-		if err != nil && targetMSN > 0 {
-			targetRequestFailed = true
-			targetFailures++
-			if shouldDisableTargetPlaylist(err) || targetFailures >= 3 {
-				targetDisabledUntil = time.Now().Add(targetDisableTO)
-				p.logger.Warnf("hlsmouflon: 定向 playlist 请求 _HLS_msn=%d 失败（%v），临时退回普通 playlist %s", targetMSN, err, targetDisableTO)
+			if result.err != nil {
+				if result.request.targetMSN > 0 {
+					targetFailures++
+					if shouldDisableTargetPlaylist(result.err) || targetFailures >= 3 {
+						targetDisabledUntil = time.Now().Add(targetDisableTO)
+						p.logger.Warnf("hlsmouflon: 定向 playlist 请求 _HLS_msn=%d 失败（%v），临时退回普通 playlist %s", result.request.targetMSN, result.err, targetDisableTO)
+						targetFailures = 0
+						targetFallbacks++
+					}
+				} else {
+					normalFailures++
+					fetchFail++
+				}
+				return
+			}
+
+			if result.request.targetMSN > 0 {
 				targetFailures = 0
-			}
-			if fallbackBody, fallbackErr := p.getPlaylist(playlist); fallbackErr == nil {
-				body, err = fallbackBody, nil
-				targetFallbacks++
 			} else {
-				err = fallbackErr
-			}
-		}
-		if err != nil {
-			fetchFail++
-		} else {
-			fetchFail = 0
-			if targetMSN > 0 && !targetRequestFailed {
-				targetFailures = 0
+				fetchFail = 0
+				if result.elapsedMs > normalMaxMs {
+					normalMaxMs = result.elapsedMs
+				}
 			}
 			if !initDone {
-				if m := mapRe.FindStringSubmatch(string(body)); m != nil {
+				if m := mapRe.FindStringSubmatch(string(result.body)); m != nil {
 					if b, e := p.get(m[1]); e == nil {
-						p.writeSeg(b)
+						enqueueWrite(b)
 						initDone = true
 					}
 				}
 			}
-			segs, failedDecode := parseMouflonSegments(body, p.decode)
+			segs, failedDecode := parseMouflonSegments(result.body, p.decode)
 			segs, fullRefs, partRefs := preferCompleteMouflonSegments(segs)
-			playlistFullRefs += fullRefs
-			playlistPartRefs += partRefs
-			if targetMSN > 0 && !targetRequestFailed && len(segs) > 0 {
-				if hlsSegmentsContainMSN(segs, targetMSN) {
-					targetHits++
+			if result.request.targetMSN == 0 && len(segs) == 0 {
+				normalEmpty++
+			}
+			feedSegments := true
+			if result.request.targetMSN > 0 {
+				if len(segs) == 0 {
+					targetPending++
 					targetMissStreak = 0
+					feedSegments = false
 				} else {
-					targetMisses++
-					targetMissStreak++
+					switch classifyTargetPlaylist(segs, result.request.targetMSN) {
+					case targetPlaylistHit:
+						targetHits++
+						targetMissStreak = 0
+						segs = hlsSegmentsForMSN(segs, result.request.targetMSN)
+						fullRefs, partRefs = countMouflonSegmentTypes(segs)
+					case targetPlaylistPending:
+						targetPending++
+						targetMissStreak = 0
+						feedSegments = false
+					case targetPlaylistMiss:
+						targetMisses++
+						targetMissStreak++
+						feedSegments = false
+					}
 				}
 			}
-			if targetMissStreak >= 20 {
-				targetDisabledUntil = time.Now().Add(targetDisableTO)
-				p.logger.Warnf("hlsmouflon: 定向 playlist 连续 %d 次未命中目标 msn，临时退回普通 playlist %s", targetMissStreak, targetDisableTO)
-				targetMissStreak = 0
+			if feedSegments {
+				playlistFullRefs += fullRefs
+				playlistPartRefs += partRefs
 			}
 			decFail += failedDecode
-			sched.add(segs)
-			flushWritable(false)
+			if feedSegments {
+				if result.request.targetMSN > 0 {
+					sched.addTarget(segs)
+				} else {
+					sched.add(segs)
+				}
+				flushWritable(false)
+			}
+		}
+
+		drainPlaylistResults := func() {
+			for {
+				select {
+				case result := <-normalResults:
+					processPlaylistResult(result)
+				case result := <-targetResults:
+					processPlaylistResult(result)
+				default:
+					return
+				}
+			}
+		}
+
+		drainPlaylistResults()
+		startNormalProbe := func() {
+			if normalInflight >= normalProbeInflight {
+				return
+			}
+			if !lastNormalProbe.IsZero() && now.Sub(lastNormalProbe) < pollInterval {
+				return
+			}
+			req := hlsPlaylistRequest{url: playlist}
+			normalInflight++
+			lastNormalProbe = now
+			normalRequests++
+			go func() {
+				reqCtx, cancel := context.WithTimeout(probeCtx, playlistRequestTO)
+				defer cancel()
+				t0 := time.Now()
+				body, err := p.getPlaylistWithContext(reqCtx, req.url)
+				result := hlsPlaylistResult{
+					request:   req,
+					body:      body,
+					err:       err,
+					elapsedMs: int(time.Since(t0).Milliseconds()),
+				}
+				select {
+				case normalResults <- result:
+				case <-probeCtx.Done():
+				}
+			}()
+		}
+		startTargetProbe := func(msn int) {
+			if msn <= 0 || targetInflight[msn] || len(targetInflight) >= targetProbeInflight {
+				return
+			}
+			if !lastTargetProbe.IsZero() && now.Sub(lastTargetProbe) < targetProbeInterval {
+				return
+			}
+			req := hlsPlaylistRequest{
+				url:       buildMouflonPlaylistURL(variant, p.pkey, msn),
+				targetMSN: msn,
+			}
+			targetInflight[msn] = true
+			lastTargetProbe = now
+			targetRequests++
+			go func() {
+				reqCtx, cancel := context.WithTimeout(probeCtx, playlistRequestTO)
+				defer cancel()
+				t0 := time.Now()
+				body, err := p.getTargetPlaylistWithContext(reqCtx, req.url)
+				result := hlsPlaylistResult{
+					request:   req,
+					body:      body,
+					err:       err,
+					elapsedMs: int(time.Since(t0).Milliseconds()),
+				}
+				select {
+				case targetResults <- result:
+				case <-probeCtx.Done():
+				}
+			}()
+		}
+		startNormalProbe()
+		if started && now.After(targetDisabledUntil) {
+			for _, msn := range sched.targetProbeMSNs(targetProbeInflight) {
+				startTargetProbe(msn)
+			}
+		}
+		drainPlaylistResults()
+		if targetMissStreak >= 20 {
+			p.logger.Warnf("hlsmouflon: 定向 playlist 连续 %d 次返回已越过目标 msn 但未包含，继续探测补洞", targetMissStreak)
+			targetMissStreak = 0
 		}
 		flushWritable(false)
 
@@ -320,11 +488,14 @@ func (p *Parser) ParseLiveStream(ctx context.Context, streamUrlInfo *live.Stream
 			gapDelta := st.gaps - lastDiagGaps
 			lastDiagGaps = st.gaps
 			targetState := "启用"
-			if time.Now().Before(targetDisabledUntil) {
+			if targetProbeInflight <= 0 {
+				targetState = "禁用"
+			} else if time.Now().Before(targetDisabledUntil) {
 				targetState = "回退"
 			}
-			p.logger.Infof("hlsmouflon 诊断 %s：累计写入 %d 段，新发现 %d 段，确认丢段本周期 %d/累计 %d，疑似漏看本周期 %d/累计 %d，下载失败 %d，重试成功 %d，队列 %d，写入等待 %d，当前 msn=%d，playlist最新msn=%d，liveLag=%d，窗口=%d-%d/%d 段，playlist完整/part %d/%d，定向playlist=%s 请求/命中/未中/回退 %d/%d/%d/%d，本周期最大单段下载 %dms",
-				modelID, st.written, st.discovered, gapDelta, st.gaps, st.suspectedMissed, st.suspectedTotal, st.downloadFailures, st.retrySuccess, st.queued, st.writeWaits, st.currentMSN, st.lastSeenMSN, st.liveLagMSN, st.windowMinMSN, st.windowMaxMSN, st.windowSegments, playlistFullRefs, playlistPartRefs, targetState, targetRequests, targetHits, targetMisses, targetFallbacks, st.maxDownloadMs)
+			writeQueue, writeBlocked, writeMaxMs := snapshotWrites(true)
+			p.logger.Infof("hlsmouflon 诊断 %s：累计写入 %d 段，新发现 %d 段，确认丢段本周期 %d/累计 %d，疑似漏看本周期 %d/累计 %d，下载失败 %d，重试成功 %d，下载队列 %d，写入队列 %d，写入等待 %d，写入阻塞 %d，当前 msn=%d，playlist最新msn=%d，liveLag=%d，窗口=%d-%d/%d 段，playlist完整/part %d/%d，普通playlist 请求/失败/空/最大耗时 %d/%d/%d/%dms，定向playlist=%s 请求/命中/待出/未中/回退 %d/%d/%d/%d/%d，本周期最大单段下载 %dms，最大单段写入 %dms",
+				modelID, st.written, st.discovered, gapDelta, st.gaps, st.suspectedMissed, st.suspectedTotal, st.downloadFailures, st.retrySuccess, st.queued, writeQueue, st.writeWaits, writeBlocked, st.currentMSN, st.lastSeenMSN, st.liveLagMSN, st.windowMinMSN, st.windowMaxMSN, st.windowSegments, playlistFullRefs, playlistPartRefs, normalRequests, normalFailures, normalEmpty, normalMaxMs, targetState, targetRequests, targetHits, targetPending, targetMisses, targetFallbacks, st.maxDownloadMs, writeMaxMs)
 			periodMSNGrowth := 0
 			if lastDiagPlaylistMSN > 0 && st.lastSeenMSN >= lastDiagPlaylistMSN {
 				periodMSNGrowth = st.lastSeenMSN - lastDiagPlaylistMSN
@@ -342,7 +513,8 @@ func (p *Parser) ParseLiveStream(ctx context.Context, streamUrlInfo *live.Stream
 			lastDiagWritten = st.written
 			lastDiagPlaylistMSN = st.lastSeenMSN
 			lastDiagWriteWaits = st.writeWaits
-			targetRequests, targetHits, targetMisses, targetFallbacks = 0, 0, 0, 0
+			targetRequests, targetHits, targetPending, targetMisses, targetFallbacks = 0, 0, 0, 0, 0
+			normalRequests, normalFailures, normalEmpty, normalMaxMs = 0, 0, 0, 0
 			playlistFullRefs, playlistPartRefs = 0, 0
 			diagAt = time.Now()
 		}
@@ -354,7 +526,7 @@ func (p *Parser) ParseLiveStream(ctx context.Context, streamUrlInfo *live.Stream
 		case <-p.stopCh:
 			flushWritable(true)
 			return nil
-		case <-time.After(pollInterval):
+		case <-time.After(playlistLoopIdle):
 		}
 	}
 }
@@ -396,7 +568,55 @@ func (p *Parser) writeSeg(b []byte) {
 func (p *Parser) get(url string) ([]byte, error) { return fetch(p.hc, url) }
 
 func (p *Parser) getPlaylist(rawURL string) ([]byte, error) {
-	return fetchWithNoCache(p.hc, withPlaylistCacheBuster(rawURL))
+	return p.getPlaylistWithContext(context.Background(), rawURL)
+}
+
+func (p *Parser) getPlaylistWithContext(ctx context.Context, rawURL string) ([]byte, error) {
+	return fetchWithCacheMode(ctx, p.hc, rawURL, false)
+}
+
+func (p *Parser) getTargetPlaylistWithContext(ctx context.Context, rawURL string) ([]byte, error) {
+	return fetchWithCacheMode(ctx, p.hc, rawURL, false)
+}
+
+type hlsPlaylistRequest struct {
+	url       string
+	targetMSN int
+}
+
+type hlsPlaylistResult struct {
+	request   hlsPlaylistRequest
+	body      []byte
+	err       error
+	elapsedMs int
+}
+
+func (p *Parser) fetchPlaylistBatch(ctx context.Context, requests []hlsPlaylistRequest) []hlsPlaylistResult {
+	if len(requests) == 0 {
+		return nil
+	}
+	batchCtx, cancel := context.WithTimeout(ctx, playlistRequestTO)
+	defer cancel()
+
+	if len(requests) == 1 {
+		body, err := p.getPlaylistWithContext(batchCtx, requests[0].url)
+		return []hlsPlaylistResult{{request: requests[0], body: body, err: err}}
+	}
+
+	ch := make(chan hlsPlaylistResult, len(requests))
+	for _, req := range requests {
+		req := req
+		go func() {
+			body, err := p.getPlaylistWithContext(batchCtx, req.url)
+			ch <- hlsPlaylistResult{request: req, body: body, err: err}
+		}()
+	}
+
+	results := make([]hlsPlaylistResult, 0, len(requests))
+	for range requests {
+		results = append(results, <-ch)
+	}
+	return results
 }
 
 type httpStatusError struct {
@@ -441,6 +661,9 @@ func withPlaylistCacheBuster(rawURL string) string {
 }
 
 func shouldDisableTargetPlaylist(err error) bool {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
 	var statusErr *httpStatusError
 	if errors.As(err, &statusErr) {
 		switch statusErr.code {
@@ -453,6 +676,44 @@ func shouldDisableTargetPlaylist(err error) bool {
 	return errors.As(err, &netErr) && netErr.Timeout()
 }
 
+type targetPlaylistOutcome int
+
+const (
+	targetPlaylistHit targetPlaylistOutcome = iota
+	targetPlaylistPending
+	targetPlaylistMiss
+)
+
+func classifyTargetPlaylist(segs []hlsSegmentRef, targetMSN int) targetPlaylistOutcome {
+	if targetMSN <= 0 || len(segs) == 0 {
+		return targetPlaylistPending
+	}
+	_, maxMSN := hlsSegmentMSNRange(segs)
+	if hlsSegmentsContainMSN(segs, targetMSN) {
+		return targetPlaylistHit
+	}
+	if maxMSN < targetMSN {
+		return targetPlaylistPending
+	}
+	return targetPlaylistMiss
+}
+
+func hlsSegmentMSNRange(segs []hlsSegmentRef) (int, int) {
+	if len(segs) == 0 {
+		return 0, 0
+	}
+	minMSN, maxMSN := segs[0].key.msn, segs[0].key.msn
+	for _, seg := range segs[1:] {
+		if seg.key.msn < minMSN {
+			minMSN = seg.key.msn
+		}
+		if seg.key.msn > maxMSN {
+			maxMSN = seg.key.msn
+		}
+	}
+	return minMSN, maxMSN
+}
+
 func hlsSegmentsContainMSN(segs []hlsSegmentRef, msn int) bool {
 	for _, seg := range segs {
 		if seg.key.msn == msn {
@@ -460,6 +721,28 @@ func hlsSegmentsContainMSN(segs []hlsSegmentRef, msn int) bool {
 		}
 	}
 	return false
+}
+
+func hlsSegmentsForMSN(segs []hlsSegmentRef, msn int) []hlsSegmentRef {
+	filtered := make([]hlsSegmentRef, 0, len(segs))
+	for _, seg := range segs {
+		if seg.key.msn == msn {
+			filtered = append(filtered, seg)
+		}
+	}
+	return filtered
+}
+
+func countMouflonSegmentTypes(segs []hlsSegmentRef) (int, int) {
+	fullCount, partCount := 0, 0
+	for _, seg := range segs {
+		if seg.partial {
+			partCount++
+		} else {
+			fullCount++
+		}
+	}
+	return fullCount, partCount
 }
 
 func hlsMonitorSummary(st hlsSegmentStats, periodMSNGrowth, periodWritten, writeWaitDelta int, targetState string) string {
@@ -499,15 +782,19 @@ func hlsMonitorSummary(st hlsSegmentStats, periodMSNGrowth, periodWritten, write
 
 // fetch 带站点 UA/Referer 拉取 url，非 200 视为错误。包级以便引导逻辑(bootstrap.go)复用。
 func fetch(hc *http.Client, url string) ([]byte, error) {
-	return fetchWithCacheMode(hc, url, false)
+	return fetchWithCacheMode(context.Background(), hc, url, false)
 }
 
 func fetchWithNoCache(hc *http.Client, url string) ([]byte, error) {
-	return fetchWithCacheMode(hc, url, true)
+	return fetchWithCacheMode(context.Background(), hc, url, true)
 }
 
-func fetchWithCacheMode(hc *http.Client, url string, noCache bool) ([]byte, error) {
-	req, _ := http.NewRequest("GET", url, nil)
+func fetchWithNoCacheContext(ctx context.Context, hc *http.Client, url string) ([]byte, error) {
+	return fetchWithCacheMode(ctx, hc, url, true)
+}
+
+func fetchWithCacheMode(ctx context.Context, hc *http.Client, url string, noCache bool) ([]byte, error) {
+	req, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
 	req.Header.Set("User-Agent", defaultUA)
 	req.Header.Set("Referer", referer)
 	if noCache {

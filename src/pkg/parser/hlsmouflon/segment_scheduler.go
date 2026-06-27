@@ -15,11 +15,12 @@ const (
 )
 
 var (
-	hlsPendingGapWait  = 12 * time.Second
+	hlsPendingGapWait  = 300 * time.Millisecond
+	hlsObservedGapWait = 20 * time.Second
 	hlsRetryBase       = 300 * time.Millisecond
 	hlsRetryMax        = 2 * time.Second
-	hlsLiveEdgeHold    = 2
-	hlsLiveEdgeMaxWait = 15 * time.Second
+	hlsLiveEdgeHold    = 1
+	hlsLiveEdgeMaxWait = 4 * time.Second
 )
 
 type hlsSegmentKey struct {
@@ -94,6 +95,7 @@ type hlsSegmentScheduler struct {
 	inflight   map[hlsSegmentKey]bool
 	ready      map[hlsSegmentKey]hlsWritableSegment
 	finished   map[hlsSegmentKey]bool
+	missing    map[hlsSegmentKey]time.Time
 	attempts   map[hlsSegmentKey]int
 	retryAt    map[hlsSegmentKey]time.Time
 
@@ -188,6 +190,7 @@ func newHLSSegmentScheduler(ctx context.Context, fetch hlsSegmentFetcher) *hlsSe
 		inflight: make(map[hlsSegmentKey]bool),
 		ready:    make(map[hlsSegmentKey]hlsWritableSegment),
 		finished: make(map[hlsSegmentKey]bool),
+		missing:  make(map[hlsSegmentKey]time.Time),
 		attempts: make(map[hlsSegmentKey]int),
 		retryAt:  make(map[hlsSegmentKey]time.Time),
 	}
@@ -245,6 +248,7 @@ func (s *hlsSegmentScheduler) reset() {
 	s.inflight = make(map[hlsSegmentKey]bool)
 	s.ready = make(map[hlsSegmentKey]hlsWritableSegment)
 	s.finished = make(map[hlsSegmentKey]bool)
+	s.missing = make(map[hlsSegmentKey]time.Time)
 	s.attempts = make(map[hlsSegmentKey]int)
 	s.retryAt = make(map[hlsSegmentKey]time.Time)
 	s.hasLast = false
@@ -268,7 +272,7 @@ func (s *hlsSegmentScheduler) nextRequestMSN() int {
 	if expected <= 0 {
 		return 0
 	}
-	if !s.hasMSNLocked(expected) {
+	if !s.hasRealMSNLocked(expected) {
 		return expected
 	}
 	if s.stats.lastSeenMSN >= expected {
@@ -277,11 +281,80 @@ func (s *hlsSegmentScheduler) nextRequestMSN() int {
 	return expected
 }
 
+func (s *hlsSegmentScheduler) nextLiveEdgeMSN() int {
+	s.collectResults()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.stats.lastSeenMSN > 0 {
+		return s.stats.lastSeenMSN + 1
+	}
+	if s.hasLast {
+		return s.lastWritten.msn + 1
+	}
+	return 0
+}
+
+func (s *hlsSegmentScheduler) targetProbeMSNs(limit int) []int {
+	s.collectResults()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if limit <= 0 {
+		return nil
+	}
+	seen := make(map[int]bool)
+	add := func(out []int, msn int) []int {
+		if msn <= 0 || seen[msn] || len(out) >= limit {
+			return out
+		}
+		seen[msn] = true
+		return append(out, msn)
+	}
+
+	var out []int
+	if s.hasLast {
+		expected := s.lastWritten.msn + 1
+		if !s.hasRealMSNLocked(expected) {
+			out = add(out, expected)
+		}
+	}
+
+	missingKeys := make([]hlsSegmentKey, 0, len(s.missing))
+	for key := range s.missing {
+		if s.finished[key] {
+			continue
+		}
+		if s.hasLast && !s.lastWritten.less(key) {
+			continue
+		}
+		missingKeys = append(missingKeys, key)
+	}
+	sort.Slice(missingKeys, func(i, j int) bool { return missingKeys[j].less(missingKeys[i]) })
+	for _, key := range missingKeys {
+		out = add(out, key.msn)
+	}
+	return out
+}
+
 func (s *hlsSegmentScheduler) add(segs []hlsSegmentRef) {
 	s.collectResults()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.updatePlaylistWindowLocked(segs)
+	s.addSegmentsLocked(segs)
+	s.scheduleLocked(time.Now())
+}
+
+func (s *hlsSegmentScheduler) addTarget(segs []hlsSegmentRef) {
+	s.collectResults()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.addSegmentsLocked(segs)
+	s.scheduleLocked(time.Now())
+}
+
+func (s *hlsSegmentScheduler) addSegmentsLocked(segs []hlsSegmentRef) {
 	for _, seg := range segs {
 		if seg.key.msn <= 0 || s.finished[seg.key] {
 			continue
@@ -293,6 +366,7 @@ func (s *hlsSegmentScheduler) add(segs []hlsSegmentRef) {
 			s.finished[seg.key] = true
 			continue
 		}
+		delete(s.missing, seg.key)
 		if _, ok := s.known[seg.key]; !ok {
 			if _, ok := s.ready[seg.key]; !ok && !s.inflight[seg.key] {
 				s.stats.discovered++
@@ -300,7 +374,6 @@ func (s *hlsSegmentScheduler) add(segs []hlsSegmentRef) {
 		}
 		s.known[seg.key] = seg
 	}
-	s.scheduleLocked(time.Now())
 }
 
 func (s *hlsSegmentScheduler) updatePlaylistWindowLocked(segs []hlsSegmentRef) {
@@ -326,6 +399,7 @@ func (s *hlsSegmentScheduler) updatePlaylistWindowLocked(segs []hlsSegmentRef) {
 		missed := minMSN - prevLastSeen - 1
 		s.stats.suspectedMissed += missed
 		s.stats.suspectedTotal += missed
+		s.markMissingRangeLocked(prevLastSeen+1, minMSN, time.Now())
 	}
 }
 
@@ -473,7 +547,10 @@ func (s *hlsSegmentScheduler) firstReadyLocked() (hlsWritableSegment, bool) {
 }
 
 func (s *hlsSegmentScheduler) canAdvanceLocked(candidate hlsSegmentKey, now time.Time, force bool) bool {
-	hasPendingBefore := s.hasPendingBeforeLocked(candidate)
+	if s.hasLast && candidate.msn > s.lastWritten.msn+1 {
+		s.markMissingRangeLocked(s.lastWritten.msn+1, candidate.msn, now)
+	}
+	hasPendingBefore, hasObservedPendingBefore := s.pendingBeforeLocked(candidate)
 	if force {
 		if hasPendingBefore {
 			s.stats.gaps += s.skipBeforeLocked(candidate)
@@ -485,7 +562,8 @@ func (s *hlsSegmentScheduler) canAdvanceLocked(candidate hlsSegmentKey, now time
 		return s.canPassLiveEdgeLocked(candidate, now)
 	}
 
-	if !s.gapSince.IsZero() && now.Sub(s.gapSince) >= hlsPendingGapWait {
+	gapWait := s.pendingGapWaitLocked(candidate, hasObservedPendingBefore)
+	if !s.gapSince.IsZero() && now.Sub(s.gapSince) >= gapWait {
 		s.stats.gaps += s.skipBeforeLocked(candidate)
 		s.gapSince = time.Time{}
 		return s.canPassLiveEdgeLocked(candidate, now)
@@ -495,6 +573,39 @@ func (s *hlsSegmentScheduler) canAdvanceLocked(candidate hlsSegmentKey, now time
 		s.stats.writeWaits++
 	}
 	return false
+}
+
+func (s *hlsSegmentScheduler) pendingGapWaitLocked(candidate hlsSegmentKey, observedPending bool) time.Duration {
+	if observedPending {
+		return hlsObservedGapWait
+	}
+	wait := hlsPendingGapWait
+	if s.stats.lastSeenMSN <= candidate.msn {
+		return wait
+	}
+	lag := s.stats.lastSeenMSN - candidate.msn
+	if lag >= 8 {
+		return 50 * time.Millisecond
+	}
+	if lag >= 5 {
+		return 100 * time.Millisecond
+	}
+	if lag >= 3 {
+		return 150 * time.Millisecond
+	}
+	return wait
+}
+
+func (s *hlsSegmentScheduler) markMissingRangeLocked(startMSN, endMSN int, now time.Time) {
+	for msn := startMSN; msn < endMSN; msn++ {
+		key := hlsSegmentKey{msn: msn}
+		if s.finished[key] || s.hasRealMSNLocked(msn) {
+			continue
+		}
+		if _, ok := s.missing[key]; !ok {
+			s.missing[key] = now
+		}
+	}
 }
 
 func (s *hlsSegmentScheduler) canPassLiveEdgeLocked(candidate hlsSegmentKey, now time.Time) bool {
@@ -519,7 +630,20 @@ func (s *hlsSegmentScheduler) canPassLiveEdgeLocked(candidate hlsSegmentKey, now
 	return false
 }
 
-func (s *hlsSegmentScheduler) hasPendingBeforeLocked(candidate hlsSegmentKey) bool {
+func (s *hlsSegmentScheduler) pendingBeforeLocked(candidate hlsSegmentKey) (bool, bool) {
+	hasMissing := false
+	for key := range s.missing {
+		if s.finished[key] {
+			continue
+		}
+		if s.hasLast && !s.lastWritten.less(key) {
+			continue
+		}
+		if key.less(candidate) {
+			hasMissing = true
+			break
+		}
+	}
 	for key := range s.known {
 		if s.finished[key] {
 			continue
@@ -528,13 +652,13 @@ func (s *hlsSegmentScheduler) hasPendingBeforeLocked(candidate hlsSegmentKey) bo
 			continue
 		}
 		if key.less(candidate) {
-			return true
+			return true, true
 		}
 	}
-	return false
+	return hasMissing, false
 }
 
-func (s *hlsSegmentScheduler) hasMSNLocked(msn int) bool {
+func (s *hlsSegmentScheduler) hasRealMSNLocked(msn int) bool {
 	for key := range s.known {
 		if key.msn == msn && !s.finished[key] {
 			return true
@@ -555,6 +679,16 @@ func (s *hlsSegmentScheduler) hasMSNLocked(msn int) bool {
 
 func (s *hlsSegmentScheduler) skipBeforeLocked(candidate hlsSegmentKey) int {
 	skipped := 0
+	for key := range s.missing {
+		if s.hasLast && !s.lastWritten.less(key) {
+			s.finishLocked(key)
+			continue
+		}
+		if key.less(candidate) {
+			s.finishLocked(key)
+			skipped++
+		}
+	}
 	for key := range s.known {
 		if s.hasLast && !s.lastWritten.less(key) {
 			s.finishLocked(key)
@@ -573,6 +707,7 @@ func (s *hlsSegmentScheduler) finishLocked(key hlsSegmentKey) {
 	delete(s.known, key)
 	delete(s.ready, key)
 	delete(s.inflight, key)
+	delete(s.missing, key)
 	delete(s.retryAt, key)
 }
 
@@ -585,6 +720,7 @@ func (s *hlsSegmentScheduler) queueLenLocked() int {
 			}
 		}
 	}
+	n += len(s.missing)
 	return n
 }
 
@@ -596,6 +732,7 @@ func (s *hlsSegmentScheduler) pruneFinishedLocked() {
 		if key.msn < s.lastWritten.msn-120 {
 			delete(s.finished, key)
 			delete(s.attempts, key)
+			delete(s.missing, key)
 		}
 	}
 }

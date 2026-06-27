@@ -32,7 +32,8 @@ var (
 const bootstrapCooldown = 5 * time.Minute
 
 // segMsnRe 从分段文件名 {id}_{msn}_{hash}_{ts}(_partN).mp4 提取 (msn, hash)。
-var segMsnRe = regexp.MustCompile(`_(\d+)_([A-Za-z0-9]+)_\d+(?:_part\d+)?\.mp4`)
+// hash 可能包含 base64 的 +、-、_ 等字符，不能只按字母数字匹配。
+var segMsnRe = regexp.MustCompile(`_(\d+)_(.+)_\d+(?:_part\d+)?\.mp4`)
 
 // ageDismissJS：过年龄门（置常见 localStorage 标记 + 只点对话框内确认按钮，不碰页脚链接）。
 const ageDismissJS = `(() => {

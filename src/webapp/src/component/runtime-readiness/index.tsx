@@ -10,6 +10,7 @@ import './runtime-readiness.css';
 
 const api = new API();
 const { Text } = Typography;
+const readyCountdownSeconds = 5;
 
 type ComponentState = 'ready' | 'preparing' | 'error';
 type RuntimeState = 'ready' | 'partial' | 'preparing' | 'error';
@@ -57,33 +58,57 @@ const statusMeta = {
 const RuntimeReadinessBanner: React.FC = () => {
   const [readiness, setReadiness] = useState<RuntimeReadiness | null>(null);
   const [visible, setVisible] = useState(false);
-  const [seenNonReady, setSeenNonReady] = useState(false);
+  const [countdown, setCountdown] = useState<number | null>(null);
   const [dismissedStatus, setDismissedStatus] = useState<RuntimeState | null>(null);
-  const hideTimer = useRef<number | null>(null);
+  const seenUnavailableRef = useRef(false);
+  const readyCountdownStartedRef = useRef(false);
+  const readyCountdownTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     let cancelled = false;
+    const stopReadyCountdown = () => {
+      if (readyCountdownTimerRef.current !== null) {
+        window.clearInterval(readyCountdownTimerRef.current);
+        readyCountdownTimerRef.current = null;
+      }
+    };
+    const startReadyCountdown = () => {
+      stopReadyCountdown();
+      setCountdown(readyCountdownSeconds);
+      setVisible(true);
+      readyCountdownTimerRef.current = window.setInterval(() => {
+        setCountdown(previous => {
+          if (previous === null) return previous;
+          if (previous <= 1) {
+            stopReadyCountdown();
+            setVisible(false);
+            return null;
+          }
+          return previous - 1;
+        });
+      }, 1000);
+    };
     const load = async () => {
       try {
         const data = await api.getRuntimeReadiness() as RuntimeReadiness;
         if (cancelled) return;
         setReadiness(data);
 
-        if (data.status === 'ready') {
+        if (data.ready) {
           setDismissedStatus(null);
-          if (seenNonReady) {
-            setVisible(true);
-            if (hideTimer.current) {
-              window.clearTimeout(hideTimer.current);
-            }
-            hideTimer.current = window.setTimeout(() => setVisible(false), 7000);
-          } else {
+          if (seenUnavailableRef.current && !readyCountdownStartedRef.current) {
+            readyCountdownStartedRef.current = true;
+            startReadyCountdown();
+          } else if (!seenUnavailableRef.current) {
             setVisible(false);
           }
           return;
         }
 
-        setSeenNonReady(true);
+        seenUnavailableRef.current = true;
+        readyCountdownStartedRef.current = false;
+        stopReadyCountdown();
+        setCountdown(null);
         setVisible(dismissedStatus !== data.status);
       } catch (err) {
         console.error('获取录制环境状态失败:', err);
@@ -95,11 +120,9 @@ const RuntimeReadinessBanner: React.FC = () => {
     return () => {
       cancelled = true;
       window.clearInterval(timer);
-      if (hideTimer.current) {
-        window.clearTimeout(hideTimer.current);
-      }
+      stopReadyCountdown();
     };
-  }, [dismissedStatus, seenNonReady]);
+  }, [dismissedStatus]);
 
   const details = useMemo(() => {
     if (!readiness) return null;
@@ -132,7 +155,10 @@ const RuntimeReadinessBanner: React.FC = () => {
     return null;
   }
 
-  const meta = statusMeta[readiness.status] || statusMeta.preparing;
+  const meta = readiness.ready ? statusMeta.ready : (statusMeta[readiness.status] || statusMeta.preparing);
+  const message = readiness.ready && countdown !== null
+    ? `核心录制已可用，${countdown} 秒后自动隐藏。`
+    : readiness.message;
   return (
     <div className="runtime-readiness">
       <Alert
@@ -141,13 +167,18 @@ const RuntimeReadinessBanner: React.FC = () => {
         icon={meta.icon}
         closable={readiness.status !== 'preparing'}
         onClose={() => {
+          if (readyCountdownTimerRef.current !== null) {
+            window.clearInterval(readyCountdownTimerRef.current);
+            readyCountdownTimerRef.current = null;
+          }
+          setCountdown(null);
           setDismissedStatus(readiness.status);
           setVisible(false);
         }}
         message={meta.title}
         description={
           <div className="runtime-readiness-description">
-            <Text>{readiness.message}</Text>
+            <Text>{message}</Text>
             {details}
           </div>
         }

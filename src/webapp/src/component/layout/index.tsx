@@ -62,8 +62,11 @@ class RootLayout extends React.Component<Props, State> {
         return (
             <Router>
                 <Layout className="all-layout">
-                    <Header className="header small-header">
-                        <h3 className="logo-text">Bililive-go</h3>
+                    <Header className="header small-header app-header">
+                        <div className="app-brand">
+                            <img className="app-brand-logo" src="/favicon.ico" alt="" />
+                            <h3 className="logo-text">Bililive-go</h3>
+                        </div>
                     </Header>
                     <Layout>
                         <Sider
