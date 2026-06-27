@@ -49,6 +49,7 @@ type hlsSegmentStats struct {
 	written          int
 	gaps             int
 	suspectedMissed  int
+	suspectedTotal   int
 	discovered       int
 	downloadFailures int
 	retrySuccess     int
@@ -322,7 +323,9 @@ func (s *hlsSegmentScheduler) updatePlaylistWindowLocked(segs []hlsSegmentRef) {
 	s.stats.windowMinMSN = minMSN
 	s.stats.windowMaxMSN = maxMSN
 	if prevLastSeen > 0 && minMSN > prevLastSeen+1 {
-		s.stats.suspectedMissed += minMSN - prevLastSeen - 1
+		missed := minMSN - prevLastSeen - 1
+		s.stats.suspectedMissed += missed
+		s.stats.suspectedTotal += missed
 	}
 }
 

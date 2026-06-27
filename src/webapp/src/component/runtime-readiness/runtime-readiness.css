@@ -1,0 +1,15 @@
+.runtime-readiness {
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.runtime-readiness .ant-alert {
+  border-radius: 0;
+  border-left: 0;
+  border-right: 0;
+}
+
+.runtime-readiness-description {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}

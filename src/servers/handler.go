@@ -951,6 +951,125 @@ type EffectiveConfigResponse struct {
 	AvailableDownloaders []string `json:"available_downloaders"`
 }
 
+type RuntimeComponentStatus struct {
+	Key      string `json:"key"`
+	Label    string `json:"label"`
+	Required bool   `json:"required"`
+	Status   string `json:"status"`
+	Message  string `json:"message,omitempty"`
+	Path     string `json:"path,omitempty"`
+}
+
+type RuntimeReadinessResponse struct {
+	Ready      bool                     `json:"ready"`
+	AllReady   bool                     `json:"all_ready"`
+	Status     string                   `json:"status"`
+	Message    string                   `json:"message"`
+	Components []RuntimeComponentStatus `json:"components"`
+}
+
+func getRuntimeReadiness(writer http.ResponseWriter, r *http.Request) {
+	cfg := configs.GetCurrentConfig()
+	availability := tools.GetDownloaderAvailability()
+
+	ffmpegStatus := RuntimeComponentStatus{
+		Key:      "ffmpeg",
+		Label:    "FFmpeg",
+		Required: true,
+		Status:   "preparing",
+		Message:  "首次启动或更新后正在准备 FFmpeg，录制启动时会自动等待它完成。",
+	}
+	if availability.FFmpegAvailable {
+		ffmpegStatus.Status = "ready"
+		ffmpegStatus.Message = "已可用于录制和后处理。"
+		ffmpegStatus.Path = availability.FFmpegPath
+	} else if cfg != nil && strings.TrimSpace(cfg.FfmpegPath) != "" {
+		ffmpegStatus.Status = "error"
+		ffmpegStatus.Message = "配置的 FFmpeg 路径不可用，请检查 ffmpeg_path。"
+		ffmpegStatus.Path = cfg.FfmpegPath
+	}
+
+	btoolsStatus := RuntimeComponentStatus{
+		Key:      "bililive-tools",
+		Label:    "bililive-tools",
+		Required: false,
+		Status:   "preparing",
+		Message:  "用于部分平台解析与工具页面，正在启动或准备依赖。",
+	}
+	if tools.IsBToolsReady() {
+		btoolsStatus.Status = "ready"
+		btoolsStatus.Message = "辅助工具服务已启动。"
+	} else if tools.IsBToolsFailed() {
+		btoolsStatus.Status = "error"
+		btoolsStatus.Message = "辅助工具服务启动失败，部分平台解析或工具页面可能不可用。"
+	}
+
+	recorderStatus := RuntimeComponentStatus{
+		Key:      "bililive-recorder",
+		Label:    "BililiveRecorder",
+		Required: false,
+		Status:   "preparing",
+		Message:  "仅在选择录播姬下载器时需要，首次使用会由 RemoteTools 准备。",
+	}
+	if availability.BililiveRecorderAvailable {
+		recorderStatus.Status = "ready"
+		recorderStatus.Message = "录播姬 CLI 已可用。"
+		recorderStatus.Path = availability.BililiveRecorderPath
+	}
+
+	components := []RuntimeComponentStatus{ffmpegStatus, btoolsStatus, recorderStatus}
+	if cfg != nil && cfg.RPC.Enable {
+		schedulerStatus := RuntimeComponentStatus{
+			Key:      "scheduler",
+			Label:    "调度器",
+			Required: false,
+			Status:   "preparing",
+			Message:  "调度器 WebUI 正在启动。",
+		}
+		if port := tools.GetSchedulerPort(); port > 0 {
+			schedulerStatus.Status = "ready"
+			schedulerStatus.Message = "调度器 WebUI 已启动。"
+		}
+		components = append(components, schedulerStatus)
+	}
+
+	ready := true
+	allReady := true
+	hasError := false
+	for _, component := range components {
+		if component.Status != "ready" {
+			allReady = false
+			if component.Required {
+				ready = false
+			}
+		}
+		if component.Status == "error" {
+			hasError = true
+		}
+	}
+
+	status := "ready"
+	message := "录制环境已就绪。"
+	if hasError && !ready {
+		status = "error"
+		message = "录制环境存在错误，需要处理后才能稳定录制。"
+	} else if !ready {
+		status = "preparing"
+		message = "录制核心组件正在准备，请等待 FFmpeg 就绪后再开始录制。"
+	} else if !allReady {
+		status = "partial"
+		message = "核心录制已可用，部分辅助工具仍在准备中。"
+	}
+
+	writeJSON(writer, RuntimeReadinessResponse{
+		Ready:      ready,
+		AllReady:   allReady,
+		Status:     status,
+		Message:    message,
+		Components: components,
+	})
+}
+
 // getEffectiveConfig 获取实际生效的配置值（用于GUI模式显示）
 func getEffectiveConfig(writer http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()

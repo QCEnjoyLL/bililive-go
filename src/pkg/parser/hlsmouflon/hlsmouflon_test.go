@@ -134,6 +134,32 @@ func TestBuildMouflonPlaylistURLPreservesQueryAndTargetsMSN(t *testing.T) {
 	}
 }
 
+func TestWithPlaylistCacheBusterPreservesMouflonParams(t *testing.T) {
+	got := withPlaylistCacheBuster("https://edge.example/live/room.m3u8?psch=v2&pkey=abc&_HLS_msn=42")
+	for _, want := range []string{"psch=v2", "pkey=abc", "_HLS_msn=42", "_bgo_reload="} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("cache buster URL 缺少参数 %q: %s", want, got)
+		}
+	}
+}
+
+func TestHLSMonitorSummaryHighlightsPlaylistMiss(t *testing.T) {
+	got := hlsMonitorSummary(hlsSegmentStats{
+		discovered:      9,
+		suspectedMissed: 6,
+		liveLagMSN:      3,
+		windowMinMSN:    3725,
+		windowMaxMSN:    3725,
+		windowSegments:  1,
+		maxDownloadMs:   212,
+	}, 15, 10, 7, "回退")
+	for _, want := range []string{"覆盖率=60%", "playlist滑窗漏段", "窗口过短", "定向playlist回退中"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("监视器摘要缺少 %q: %s", want, got)
+		}
+	}
+}
+
 func TestSegmentSchedulerRetriesFailedDownload(t *testing.T) {
 	restore := tuneSchedulerForTest()
 	defer restore()
@@ -228,12 +254,15 @@ func TestSegmentSchedulerTracksSuspectedMissedPlaylistWindow(t *testing.T) {
 	})
 	s.add([]hlsSegmentRef{{key: hlsSegmentKey{msn: 5}, url: "seg5"}})
 	st := s.snapshot(false)
-	if st.suspectedMissed != 2 {
+	if st.suspectedMissed != 2 || st.suspectedTotal != 2 {
 		t.Fatalf("疑似漏看统计错误: %+v", st)
 	}
 	_ = s.snapshot(true)
 	if st = s.snapshot(false); st.suspectedMissed != 0 {
 		t.Fatalf("周期疑似漏看统计应被重置: %+v", st)
+	}
+	if st.suspectedTotal != 2 {
+		t.Fatalf("累计疑似漏看不应被周期重置: %+v", st)
 	}
 }
 

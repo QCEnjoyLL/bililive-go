@@ -165,7 +165,7 @@ func (p *Parser) Status() (map[string]interface{}, error) {
 // 影响范围广，暂不在此处理。当前录制的停止完全由 recorder.Close() → parser.Stop() 控制。
 func (p *Parser) ParseLiveStream(ctx context.Context, streamUrlInfo *live.StreamUrlInfo, live live.Live, file string) (err error) {
 	url := streamUrlInfo.Url
-	ffmpegPath, err := utils.GetFFmpegPathForLive(ctx, live)
+	ffmpegPath, err := utils.EnsureFFmpegPathForLive(ctx, live)
 	if err != nil {
 		return err
 	}

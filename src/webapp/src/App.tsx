@@ -11,11 +11,13 @@ import IOStats from './component/io-stats/index';
 import UpdateBanner from './component/update-banner/index';
 import UpdatePage from './component/update-page/index';
 import DanmakuSettings from './component/danmaku-config/index';
+import RuntimeReadinessBanner from './component/runtime-readiness/index';
 
 const App: React.FC = () => {
   return (
     <>
       <UpdateBanner />
+      <RuntimeReadinessBanner />
       <RootLayout>
         <Routes>
           <Route path="/update/*" element={<UpdatePage />} />

@@ -114,7 +114,7 @@ func (p *Parser) ParseLiveStream(ctx context.Context, streamUrlInfo *live.Stream
 	}
 	headers := streamUrlInfo.HeadersForDownloader
 
-	ffmpegPath, err := utils.GetFFmpegPathForLive(ctx, liveObj)
+	ffmpegPath, err := utils.EnsureFFmpegPathForLive(ctx, liveObj)
 	if err != nil {
 		return err
 	}

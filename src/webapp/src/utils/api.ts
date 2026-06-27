@@ -304,6 +304,13 @@ class API {
     }
 
     /**
+     * 获取录制环境准备状态
+     */
+    getRuntimeReadiness() {
+        return utils.requestGet(`${BASE_URL}/runtime/readiness`);
+    }
+
+    /**
      * 检查是否有更新的云端 WebUI 可用
      * 比较本地 WebUI 版本和云端可用版本
      */

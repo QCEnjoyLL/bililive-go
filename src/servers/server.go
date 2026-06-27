@@ -2,7 +2,6 @@ package servers
 
 import (
 	"context"
-	"crypto/subtle"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -67,11 +66,13 @@ func initMux(ctx context.Context) *mux.Router {
 			)
 		})
 	} /* , log */)
-	m.Use(basicAuthMiddleware(configs.GetCurrentConfig().RPC.Auth))
+	m.Use(webAuthMiddleware(configs.GetCurrentConfig().RPC.Auth))
 
 	// api router
 	apiRoute := m.PathPrefix(apiRouterPrefix).Subrouter()
 	apiRoute.Use(mux.CORSMethodMiddleware(apiRoute))
+	apiRoute.HandleFunc("/auth/login", loginWebUI).Methods("POST")
+	apiRoute.HandleFunc("/auth/logout", logoutWebUI).Methods("POST")
 	apiRoute.HandleFunc("/info", getInfo).Methods("GET")
 	apiRoute.HandleFunc("/config", getConfig).Methods("GET")
 	apiRoute.HandleFunc("/config", putConfig).Methods("PUT")
@@ -118,6 +119,7 @@ func initMux(ctx context.Context) *mux.Router {
 	apiRoute.HandleFunc("/webui/remote/status", getRemoteWebuiStatus).Methods("GET")  // 获取远程 WebUI 状态
 	apiRoute.HandleFunc("/webui/remote/check", checkRemoteWebuiUpdate).Methods("GET") // 检查远程 WebUI 更新
 	apiRoute.HandleFunc("/memory", getMemoryStats).Methods("GET")                     // 获取内存统计信息
+	apiRoute.HandleFunc("/runtime/readiness", getRuntimeReadiness).Methods("GET")     // 获取录制环境准备状态
 	// 更新 API 路由
 	apiRoute.HandleFunc("/update/check", checkUpdate).Methods("GET")          // 检查更新
 	apiRoute.HandleFunc("/update/latest", getLatestRelease).Methods("GET")    // 获取最新版本信息
@@ -279,6 +281,8 @@ func initMux(ctx context.Context) *mux.Router {
 		}
 	})
 
+	m.HandleFunc("/login", loginPage).Methods("GET")
+
 	fs, err := webapp.FS()
 	if err != nil {
 		applog.GetLogger().Fatal(err)
@@ -294,27 +298,6 @@ func initMux(ctx context.Context) *mux.Router {
 		}).Methods("GET")
 	}
 	return m
-}
-
-func basicAuthMiddleware(auth configs.RPCAuth) mux.MiddlewareFunc {
-	if !auth.Enable {
-		return func(next http.Handler) http.Handler { return next }
-	}
-	username := auth.Username
-	password := auth.Password
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			user, pass, ok := r.BasicAuth()
-			userOK := subtle.ConstantTimeCompare([]byte(user), []byte(username)) == 1
-			passOK := subtle.ConstantTimeCompare([]byte(pass), []byte(password)) == 1
-			if !ok || !userOK || !passOK {
-				w.Header().Set("WWW-Authenticate", `Basic realm="BiliLive-go WebUI", charset="UTF-8"`)
-				http.Error(w, "需要登录后访问 BiliLive-go WebUI", http.StatusUnauthorized)
-				return
-			}
-			next.ServeHTTP(w, r)
-		})
-	}
 }
 
 func isPublicRPCBind(bind string) bool {

@@ -57,6 +57,11 @@ func IsBToolsStarting() bool {
 	return status == BToolsStatusStarting || status == BToolsStatusNotStarted
 }
 
+// IsBToolsFailed 检查 bililive-tools 是否启动失败
+func IsBToolsFailed() bool {
+	return btoolsStatusValue(currentBToolsStatus.Load()) == BToolsStatusFailed
+}
+
 // Cleanup 关闭所有通过 tools 包管理的资源：
 // - 终止所有已注册的子进程（btools、klive 等）
 // - 关闭 remotetools WebUI 服务器

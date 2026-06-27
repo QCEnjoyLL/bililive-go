@@ -157,7 +157,7 @@ type Parser struct {
 func (p *Parser) ParseLiveStream(ctx context.Context, _ *live.StreamUrlInfo, liveObj live.Live, file string) error {
 	pageURL := liveObj.GetRawUrl()
 
-	ffmpegPath, err := utils.GetFFmpegPathForLive(ctx, liveObj)
+	ffmpegPath, err := utils.EnsureFFmpegPathForLive(ctx, liveObj)
 	if err != nil {
 		return fmt.Errorf("browserrec: 找不到 ffmpeg: %w", err)
 	}

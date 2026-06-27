@@ -13,12 +13,16 @@ import (
 	"regexp"
 	"runtime/debug"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/bililive-go/bililive-go/src/configs"
 	"github.com/bililive-go/bililive-go/src/live"
 	blog "github.com/bililive-go/bililive-go/src/log"
 	"github.com/kira1928/remotetools"
 )
+
+var ffmpegInstallMu sync.Mutex
 
 func init() {
 	ConnCounterManager = ConnCounterManagerType{}
@@ -56,8 +60,21 @@ func GetFFmpegPath(ctx context.Context) (string, error) {
 
 // GetFFmpegPathForLive 获取特定直播间的FFmpeg路径（使用解析后的配置）
 func GetFFmpegPathForLive(ctx context.Context, liveInstance live.Live) (string, error) {
+	return getFFmpegPathForLive(ctx, liveInstance, false)
+}
+
+// EnsureFFmpegPathForLive 与 GetFFmpegPathForLive 类似，但在未找到 FFmpeg 时会尝试通过 RemoteTools 安装。
+// 录制路径应使用该函数，避免 Docker 首次启动时 WebUI 已可用但 ffmpeg 尚未下载完成而直接录制失败。
+func EnsureFFmpegPathForLive(ctx context.Context, liveInstance live.Live) (string, error) {
+	return getFFmpegPathForLive(ctx, liveInstance, true)
+}
+
+func getFFmpegPathForLive(ctx context.Context, liveInstance live.Live, installIfMissing bool) (string, error) {
 	cfg := configs.GetCurrentConfig()
 	if cfg == nil {
+		if installIfMissing {
+			return EnsureFFmpegPath(ctx)
+		}
 		return GetFFmpegPath(ctx)
 	}
 
@@ -83,7 +100,78 @@ func GetFFmpegPathForLive(ctx context.Context, liveInstance live.Live) (string, 
 	}
 
 	// 如果没有配置FFmpeg路径，尝试从环境变量或 remotetools 查找
+	if installIfMissing {
+		return EnsureFFmpegPath(ctx)
+	}
 	return GetFFmpegPath(ctx)
+}
+
+// EnsureFFmpegPath 获取 FFmpeg 路径；如果系统和 RemoteTools 中都不存在，则尝试安装并等待完成。
+func EnsureFFmpegPath(ctx context.Context) (string, error) {
+	if path, err := GetFFmpegPath(ctx); err == nil {
+		return path, nil
+	}
+	if cfg := configs.GetCurrentConfig(); cfg != nil && cfg.FfmpegPath != "" {
+		return GetFFmpegPath(ctx)
+	}
+
+	ffmpegInstallMu.Lock()
+	defer ffmpegInstallMu.Unlock()
+
+	if path, err := GetFFmpegPath(ctx); err == nil {
+		return path, nil
+	}
+
+	api := remotetools.Get()
+	if api == nil {
+		return "", errors.New("remotetools API 不可用，无法自动准备 ffmpeg")
+	}
+	toolFfmpeg, err := api.GetTool("ffmpeg")
+	if err != nil {
+		return "", fmt.Errorf("获取 remotetools ffmpeg 工具失败: %w", err)
+	}
+
+	deadline := time.Now().Add(10 * time.Minute)
+	for {
+		if path, err := GetFFmpegPath(ctx); err == nil {
+			return path, nil
+		}
+		if toolFfmpeg.DoesToolExist() {
+			return toolFfmpeg.GetToolPath(), nil
+		}
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		blog.GetLogger().Info("FFmpeg 未就绪，正在通过 RemoteTools 准备 ffmpeg...")
+		installErr := toolFfmpeg.Install()
+		if installErr == nil {
+			if path, err := GetFFmpegPath(ctx); err == nil {
+				return path, nil
+			}
+			if toolFfmpeg.DoesToolExist() {
+				return toolFfmpeg.GetToolPath(), nil
+			}
+		} else if !isRemoteToolBusyError(installErr) {
+			return "", fmt.Errorf("ffmpeg 自动下载失败: %w", installErr)
+		}
+
+		if time.Now().After(deadline) {
+			return "", fmt.Errorf("等待 ffmpeg 准备完成超时")
+		}
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-time.After(2 * time.Second):
+		}
+	}
+}
+
+func isRemoteToolBusyError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "busy") || strings.Contains(msg, "another operation")
 }
 
 func IsFFmpegExist(ctx context.Context) bool {
