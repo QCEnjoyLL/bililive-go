@@ -180,6 +180,7 @@ coverage.txt
 # 录制输出与本地测试配置（不纳入版本库）
 /Videos/*
 !/Videos/.gitkeep
+/config.yml
 /config-*.yml
 *.mkv
 

@@ -1047,6 +1047,12 @@ func newConfigPostProcess(c *Config) {
 	if c.AppDataPath == "" {
 		c.AppDataPath = filepath.Join(c.OutPutPath, ".appdata")
 	}
+	if c.Proxy.InfoProxy == nil {
+		c.Proxy.InfoProxy = &ProxyEntry{}
+	}
+	if c.Proxy.DownloadProxy == nil {
+		c.Proxy.DownloadProxy = &ProxyEntry{}
+	}
 }
 
 // configMinimal 是配置文件的最小子集，仅包含 launcher 决策所需的字段。

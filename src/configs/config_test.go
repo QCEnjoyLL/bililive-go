@@ -8,8 +8,8 @@ import (
 )
 
 func TestNewConfig(t *testing.T) {
-	file := "../../config.yml"
-	c, err := NewConfigWithFile("../../config.yml")
+	file := "../../config.example.yml"
+	c, err := NewConfigWithFile("../../config.example.yml")
 	assert.NoError(t, err)
 	assert.Equal(t, file, c.File)
 }

@@ -192,6 +192,7 @@ https://github.com/bililive-go/bililive-go/wiki/Install-Linux
 
 例如：
 ```
+# 首次使用可先从仓库的 config.example.yml 复制一份为 ~/config.yml 后再按需修改
 docker run --restart=always -v ~/config.yml:/etc/bililive-go/config.yml -v ~/Videos:/srv/bililive -p 127.0.0.1:8080:8080 -d orangeqiu/bililive-go
 ```
 
@@ -355,7 +356,8 @@ bililive-go/
 │   └── webapp/        # React 前端
 ├── test/              # 测试工具
 ├── tools/             # 开发工具依赖
-├── config.yml         # 配置文件（用户创建）
+├── config.example.yml # 默认配置示例
+├── config.yml         # 本地配置文件（用户创建，不提交）
 └── build.go           # 构建脚本入口
 ```
 
