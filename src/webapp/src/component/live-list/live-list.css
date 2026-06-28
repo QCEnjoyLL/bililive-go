@@ -19,6 +19,32 @@
     }
 }
 
+.live-list-title {
+    margin-right: 12px;
+    color: var(--bgo-text);
+    font-size: 20px;
+    font-weight: 600;
+}
+
+.live-list-subtitle {
+    color: var(--bgo-muted);
+    font-size: 14px;
+}
+
+.live-list-table .ant-table-cell {
+    color: var(--bgo-text);
+}
+
+.live-list-table .live-room-link {
+    color: color-mix(in srgb, var(--bgo-text) 88%, var(--bgo-accent));
+    font-weight: 500;
+}
+
+.live-list-table .live-room-link:hover,
+.live-list-table .live-room-link:focus {
+    color: var(--bgo-accent-hover);
+}
+
 .live-expanded-panel {
     overflow: hidden;
     color: var(--bgo-text);

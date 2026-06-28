@@ -543,7 +543,7 @@ class LiveList extends React.Component<Props, IState> {
             key: 'room',
             render: (room: Room) => (
                 <span>
-                    <a href={room.url} rel="noopener noreferrer" target="_blank" onClick={(e) => e.stopPropagation()}>{room.roomName}</a>
+                    <a className="live-room-link" href={room.url} rel="noopener noreferrer" target="_blank" onClick={(e) => e.stopPropagation()}>{room.roomName}</a>
                     {room.lastError && (
                         <Tooltip title={room.lastError}>
                             <ExclamationCircleOutlined style={{ color: '#ff4d4f', marginLeft: 6, fontSize: 14 }} />
@@ -572,7 +572,7 @@ class LiveList extends React.Component<Props, IState> {
             key: 'name',
             render: (name: string, data: ItemData) => (
                 <span>
-                    <a href={data.room.url} rel="noopener noreferrer" target="_blank" onClick={(e) => e.stopPropagation()}>{name}</a>
+                    <a className="live-room-link" href={data.room.url} rel="noopener noreferrer" target="_blank" onClick={(e) => e.stopPropagation()}>{name}</a>
                     {data.room.lastError && (
                         <Tooltip title={data.room.lastError}>
                             <ExclamationCircleOutlined style={{ color: '#ff4d4f', marginLeft: 6, fontSize: 14 }} />
@@ -2146,8 +2146,8 @@ class LiveList extends React.Component<Props, IState> {
                         }}>
                             {/* ... content ... */}
                             <div>
-                                <span style={{ fontSize: '20px', fontWeight: 600, color: 'rgba(0,0,0,0.85)', marginRight: 12 }}>直播间列表</span>
-                                <span style={{ fontSize: '14px', color: 'rgba(0,0,0,0.45)' }}>Room List</span>
+                                <span className="live-list-title">直播间列表</span>
+                                <span className="live-list-subtitle">Room List</span>
                             </div>
                             <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
                                 <Tooltip title={autoRefreshEnabled ? "自动刷新已开启：约每 5 秒同步列表状态，不刷新网页" : "自动刷新已关闭：点击可重新开启定时同步"}>
@@ -2191,7 +2191,7 @@ class LiveList extends React.Component<Props, IState> {
                             </div>
                         </div>
                         <Table
-                            className="item-pad"
+                            className="item-pad live-list-table"
                             columns={this.getColumnsWithSort((this.state.window.screen.width > 768) ? this.columns : this.smallColumns)}
                             dataSource={this.state.list}
                             size={(this.state.window.screen.width > 768) ? "large" : "middle"}

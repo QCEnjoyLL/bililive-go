@@ -269,16 +269,7 @@ const UpdateBanner: React.FC = () => {
             {updateInfo.changelog && (
               <>
                 <Divider plain>更新日志</Divider>
-                <Paragraph
-                  style={{
-                    maxHeight: 200,
-                    overflow: 'auto',
-                    padding: '12px',
-                    background: '#f5f5f5',
-                    borderRadius: '4px',
-                    whiteSpace: 'pre-wrap'
-                  }}
-                >
+                <Paragraph className="changelog-content">
                   {updateInfo.changelog}
                 </Paragraph>
               </>

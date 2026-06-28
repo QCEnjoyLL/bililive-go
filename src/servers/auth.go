@@ -386,6 +386,7 @@ const webAuthLoginHTML = `<!doctype html>
     .brand-name strong {
       font-size: 16px;
       line-height: 1.2;
+      color: var(--ink);
       white-space: nowrap;
     }
     .brand-name span {
@@ -514,6 +515,7 @@ const webAuthLoginHTML = `<!doctype html>
       line-height: 1.18;
       font-weight: 780;
       letter-spacing: 0;
+      color: var(--ink);
     }
     .intro-copy p {
       margin: 0;
@@ -560,6 +562,7 @@ const webAuthLoginHTML = `<!doctype html>
       line-height: 1.25;
       font-weight: 760;
       letter-spacing: 0;
+      color: var(--ink);
     }
     .form-subtitle {
       margin: 0 0 30px;

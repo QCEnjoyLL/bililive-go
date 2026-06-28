@@ -31,12 +31,15 @@
 .update-page .changelog-content {
   max-height: 200px;
   overflow: auto;
-  padding: 12px;
-  background: #f5f5f5;
-  border-radius: 4px;
+  padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, var(--bgo-border) 82%, transparent);
+  background: color-mix(in srgb, var(--bgo-elevated-bg) 88%, var(--bgo-panel-bg));
+  color: var(--bgo-text);
+  border-radius: 6px;
   white-space: pre-wrap;
-  font-family: monospace;
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace;
   font-size: 13px;
+  line-height: 1.65;
 }
 
 .update-page .no-update-message {
@@ -50,10 +53,17 @@
   margin-bottom: 16px;
 }
 
-/* 深色模式支持 */
-@media (prefers-color-scheme: dark) {
-  .update-page .changelog-content {
-    background: #1f1f1f;
-    color: #fff;
-  }
+.update-page .changelog-content::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.update-page .changelog-content::-webkit-scrollbar-track {
+  background: color-mix(in srgb, var(--bgo-panel-bg) 80%, transparent);
+}
+
+.update-page .changelog-content::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--bgo-muted) 58%, transparent);
+  border: 2px solid color-mix(in srgb, var(--bgo-elevated-bg) 88%, var(--bgo-panel-bg));
+  border-radius: 999px;
 }
