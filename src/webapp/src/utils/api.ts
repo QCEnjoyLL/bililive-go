@@ -215,6 +215,17 @@ class API {
     }
 
     /**
+     * 验证 OpenList 配置是否可用于云上传
+     */
+    validateOpenListConfig(payload: {
+        external_url?: string;
+        external_token?: string;
+        storage_name?: string;
+    }) {
+        return utils.requestPost(`${BASE_URL}/openlist/validate`, payload);
+    }
+
+    /**
      * 更新平台配置
      * @param platformKey 平台标识
      * @param updates 要更新的配置项

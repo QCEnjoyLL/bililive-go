@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strings"
 )
 
 // Client OpenList API 客户端
@@ -21,8 +22,8 @@ type Client struct {
 // NewClient 创建 OpenList 客户端
 func NewClient(baseURL, token string) *Client {
 	return &Client{
-		baseURL: baseURL,
-		token:   token,
+		baseURL: strings.TrimRight(strings.TrimSpace(baseURL), "/"),
+		token:   strings.TrimSpace(token),
 		httpClient: &http.Client{
 			Timeout: 0, // 上传可能需要很长时间
 		},
@@ -135,9 +136,15 @@ func (c *Client) ListStorages(ctx context.Context) ([]StorageInfo, error) {
 
 // CheckStorageHealth 检查存储健康状态
 func (c *Client) CheckStorageHealth(ctx context.Context, storageName string) error {
-	body := fmt.Sprintf(`{"path":"/%s","refresh":true}`, storageName)
+	body, err := json.Marshal(map[string]any{
+		"path":    "/" + strings.Trim(storageName, "/"),
+		"refresh": true,
+	})
+	if err != nil {
+		return fmt.Errorf("构建请求失败: %w", err)
+	}
 	req, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/api/fs/list",
-		bytes.NewReader([]byte(body)))
+		bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
@@ -168,9 +175,15 @@ func (c *Client) CheckStorageHealth(ctx context.Context, storageName string) err
 
 // GetToken 获取管理员 Token（通过登录）
 func (c *Client) GetToken(ctx context.Context, username, password string) (string, error) {
-	body := fmt.Sprintf(`{"username":"%s","password":"%s"}`, username, password)
+	body, err := json.Marshal(map[string]string{
+		"username": username,
+		"password": password,
+	})
+	if err != nil {
+		return "", fmt.Errorf("构建请求失败: %w", err)
+	}
 	req, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/api/auth/login",
-		bytes.NewReader([]byte(body)))
+		bytes.NewReader(body))
 	if err != nil {
 		return "", err
 	}
@@ -203,9 +216,14 @@ func (c *Client) GetToken(ctx context.Context, username, password string) (strin
 
 // Mkdir 创建目录
 func (c *Client) Mkdir(ctx context.Context, remotePath string) error {
-	body := fmt.Sprintf(`{"path":"%s"}`, remotePath)
+	body, err := json.Marshal(map[string]string{
+		"path": remotePath,
+	})
+	if err != nil {
+		return fmt.Errorf("构建请求失败: %w", err)
+	}
 	req, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/api/fs/mkdir",
-		bytes.NewReader([]byte(body)))
+		bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
@@ -227,8 +245,8 @@ func (c *Client) Mkdir(ctx context.Context, remotePath string) error {
 		return fmt.Errorf("解析响应失败: %w", err)
 	}
 
-	// 目录已存在也算成功
-	if result.Code != 200 && result.Message != "file exists" {
+	// 目录已存在也算成功，不同 OpenList 版本的提示文案略有差异。
+	if result.Code != 200 && !strings.Contains(strings.ToLower(result.Message), "exist") && !strings.Contains(result.Message, "已存在") {
 		return fmt.Errorf("创建目录失败: %s", result.Message)
 	}
 

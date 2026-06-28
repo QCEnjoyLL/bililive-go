@@ -170,6 +170,77 @@ html[data-bgo-theme='dark'] .ant-menu-light {
   border-color: var(--bgo-accent-hover) !important;
 }
 
+.ant-switch {
+  width: 44px !important;
+  min-width: 44px !important;
+  height: 26px !important;
+  padding: 0 !important;
+  border-radius: 999px !important;
+  background: #e9e9e9 !important;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.04) !important;
+  transition: .3s all ease-in-out !important;
+}
+
+.ant-switch:hover:not(.ant-switch-disabled) {
+  background: #dedede !important;
+}
+
+.ant-switch.ant-switch-checked {
+  background: #34c759 !important;
+}
+
+.ant-switch.ant-switch-checked:hover:not(.ant-switch-disabled) {
+  background: #30d158 !important;
+}
+
+html[data-bgo-theme='dark'] .ant-switch {
+  background: #39393d !important;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06) !important;
+}
+
+html[data-bgo-theme='dark'] .ant-switch:hover:not(.ant-switch-disabled) {
+  background: #48484d !important;
+}
+
+html[data-bgo-theme='dark'] .ant-switch.ant-switch-checked,
+html[data-bgo-theme='dark'] .ant-switch.ant-switch-checked:hover:not(.ant-switch-disabled) {
+  background: #30d158 !important;
+}
+
+.ant-switch .ant-switch-handle {
+  top: 2px !important;
+  inset-inline-start: 2px !important;
+  width: 22px !important;
+  height: 22px !important;
+  border-radius: 999px !important;
+  transform: translateX(0) !important;
+  transition: .3s all ease-in-out !important;
+}
+
+.ant-switch .ant-switch-handle::before {
+  border-radius: 999px !important;
+  background: #fff !important;
+  box-shadow: 2px 0 8px rgba(0, 0, 0, .16) !important;
+  transition: .3s all ease-in-out !important;
+}
+
+.ant-switch.ant-switch-checked .ant-switch-handle {
+  inset-inline-start: 2px !important;
+  transform: translateX(18px) !important;
+}
+
+.ant-switch.ant-switch-checked .ant-switch-handle::before {
+  box-shadow: -2px 0 8px rgba(0, 0, 0, .16) !important;
+}
+
+.ant-switch:active:not(.ant-switch-disabled) .ant-switch-handle {
+  width: 28px !important;
+}
+
+.ant-switch.ant-switch-checked:active:not(.ant-switch-disabled) .ant-switch-handle {
+  transform: translateX(12px) !important;
+}
+
 .ant-modal .ant-modal-content {
   background: var(--bgo-panel-bg) !important;
   color: var(--bgo-text);

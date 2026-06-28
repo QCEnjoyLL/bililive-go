@@ -100,7 +100,7 @@ const makePalette = (
   dark: makeDark(darkAccent, darkHover, darkSoft, darkOverrides),
 });
 
-export const THEME_PALETTES: ThemePaletteDefinition[] = [
+const THEME_PALETTE_DEFINITIONS: ThemePaletteDefinition[] = [
   makePalette('one', 'One', '#61afef', '#4078f2', '#2864d8', 'rgba(64, 120, 242, 0.13)', '#61afef', '#7ec7ff', 'rgba(97, 175, 239, 0.20)', {
     pageBg: '#fafafa',
     sidebarBg: '#f0f2f5',
@@ -539,9 +539,13 @@ export const THEME_PALETTES: ThemePaletteDefinition[] = [
 ];
 
 export const DEFAULT_THEME_PALETTE: ThemePalette = 'one';
+export const THEME_PALETTES: ThemePaletteDefinition[] = [...THEME_PALETTE_DEFINITIONS]
+  .sort((a, b) => a.key.localeCompare(b.key));
 
 export function getPaletteDefinition(palette: ThemePalette): ThemePaletteDefinition {
-  return THEME_PALETTES.find((item) => item.key === palette) || THEME_PALETTES[0];
+  return THEME_PALETTES.find((item) => item.key === palette)
+    || THEME_PALETTES.find((item) => item.key === DEFAULT_THEME_PALETTE)
+    || THEME_PALETTES[0];
 }
 
 export function getThemeColors(mode: ResolvedThemeMode, palette: ThemePalette): ThemeColorSet {

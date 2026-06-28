@@ -28,9 +28,9 @@ import CloudUploadSettings from './CloudUploadSettings';
 const api = new API();
 const { TextArea } = Input;
 
-// 功能开关：代理配置（开发中，设为 false 隐藏 UI）
+// 功能开关：代理配置
 // 与后端 configs.EnableProxyConfig 对应
-const ENABLE_PROXY_CONFIG = false;
+const ENABLE_PROXY_CONFIG = true;
 const { Panel } = Collapse;
 
 // 配置项类型定义
@@ -47,7 +47,16 @@ interface DownloaderAvailability {
 type DownloaderType = 'ffmpeg' | 'native' | 'bililive-recorder' | '';
 
 interface EffectiveConfig {
-  rpc: { enable: boolean; bind: string };
+  rpc: {
+    enable: boolean;
+    bind: string;
+    auth?: {
+      enable: boolean;
+      username: string;
+      password: string;
+    };
+    sse_list_threshold?: number;
+  };
   debug: boolean;
   interval: number;
   out_put_path: string;
@@ -65,8 +74,11 @@ interface EffectiveConfig {
     downloader_type?: DownloaderType;
     use_native_flv_parser?: boolean; // 已废弃，保留用于向后兼容
     remove_symbol_other_character: boolean;
+    enable_flv_proxy_segment?: boolean;
     recording_engine?: string;
     recording_quality?: string;
+    hls_keystream?: string;
+    hls_pkey?: string;
   };
   out_put_tmpl: string;
   default_out_put_tmpl: string;
@@ -74,12 +86,28 @@ interface EffectiveConfig {
     on_room_name_changed: boolean;
     max_duration: number;
     max_file_size: string;
+    max_record_duration: number;
   };
   on_record_finished: {
     convert_to_mp4: boolean;
     delete_flv_after_convert: boolean;
     custom_commandline: string;
     fix_flv_at_first: boolean;
+    save_cover: boolean;
+    burn_subtitles: boolean;
+    burn_subtitles_codec: string;
+    burn_subtitles_crf: string;
+    burn_subtitles_preset: string;
+    burn_delete_ass: boolean;
+    burn_delete_source: boolean;
+    upload_timing: string;
+    cloud_upload: {
+      enable: boolean;
+      storage_name: string;
+      upload_path_tmpl: string;
+      delete_after_upload: boolean;
+      additional_storages?: string[];
+    };
   };
   timeout_in_us: number;
   timeout_in_seconds: number;
@@ -117,6 +145,17 @@ interface EffectiveConfig {
       icon: string;
       level: string;
     };
+    ntfy: {
+      enable: boolean;
+      URL: string;
+      token: string;
+      tag: string;
+    };
+    wxpusher: {
+      enable: boolean;
+      appToken: string;
+      uids: string[];
+    };
   };
   app_data_path: string;
   actual_app_data_path: string;
@@ -133,6 +172,29 @@ interface EffectiveConfig {
   proxy: {
     enable: boolean;
     url: string;
+    info_proxy?: {
+      enable: boolean;
+      url: string;
+    };
+    download_proxy?: {
+      enable: boolean;
+      url: string;
+    };
+  };
+  task_queue?: {
+    max_concurrent: number;
+  };
+  openlist?: {
+    port: number;
+    data_path: string;
+    external_url: string;
+    external_token: string;
+  };
+  update?: {
+    auto_check: boolean;
+    check_interval_hours: number;
+    auto_download: boolean;
+    include_prerelease: boolean;
   };
   // 流偏好配置（新版）
   stream_preference?: {
@@ -364,7 +426,8 @@ const GlobalSettings: React.FC<{
         ...config,
         video_split_strategies: config.video_split_strategies ? {
           ...config.video_split_strategies,
-          max_duration: config.video_split_strategies.max_duration / 1000000000
+          max_duration: config.video_split_strategies.max_duration / 1000000000,
+          max_record_duration: config.video_split_strategies.max_record_duration / 1000000000
         } : undefined,
         stream_preference: config.stream_preference ? {
           ...config.stream_preference,
@@ -393,7 +456,8 @@ const GlobalSettings: React.FC<{
         ...values,
         video_split_strategies: values.video_split_strategies ? {
           ...values.video_split_strategies,
-          max_duration: (values.video_split_strategies.max_duration || 0) * 1000000000
+          max_duration: (values.video_split_strategies.max_duration || 0) * 1000000000,
+          max_record_duration: (values.video_split_strategies.max_record_duration || 0) * 1000000000
         } : undefined,
         stream_preference: values.stream_preference ? {
           quality: values.stream_preference.quality || undefined,
@@ -430,6 +494,26 @@ const GlobalSettings: React.FC<{
           <ConfigField label="绑定地址" description="RPC 服务监听的地址和端口">
             <Form.Item name={['rpc', 'bind']} noStyle>
               <Input placeholder="例如: :8080 或 127.0.0.1:8080" style={{ width: 300 }} />
+            </Form.Item>
+          </ConfigField>
+          <ConfigField label="启用登录鉴权" description="WebUI 暴露到局域网或公网时建议开启">
+            <Form.Item name={['rpc', 'auth', 'enable']} valuePropName="checked" noStyle>
+              <Switch />
+            </Form.Item>
+          </ConfigField>
+          <ConfigField label="登录用户名" description="启用登录鉴权后用于进入 WebUI">
+            <Form.Item name={['rpc', 'auth', 'username']} noStyle>
+              <Input placeholder="例如: admin" style={{ width: 240 }} />
+            </Form.Item>
+          </ConfigField>
+          <ConfigField label="登录密码" description="启用登录鉴权时不能为空；保存后新会话会使用新密码">
+            <Form.Item name={['rpc', 'auth', 'password']} noStyle>
+              <Input.Password placeholder="请输入登录密码" style={{ width: 300 }} />
+            </Form.Item>
+          </ConfigField>
+          <ConfigField label="SSE 列表阈值" description="监控列表超过该数量时，仅详情页启用实时推送，降低浏览器压力">
+            <Form.Item name={['rpc', 'sse_list_threshold']} noStyle>
+              <InputNumber min={1} max={10000} style={{ width: 200 }} />
             </Form.Item>
           </ConfigField>
         </Card>
@@ -588,6 +672,30 @@ const GlobalSettings: React.FC<{
               <Switch />
             </Form.Item>
           </ConfigField>
+          <ConfigField
+            label="启用 FLV 代理分段"
+            description="仅对 FFmpeg 下载器生效；检测到编码参数变化时主动触发分段，降低花屏风险。"
+          >
+            <Form.Item name={['feature', 'enable_flv_proxy_segment']} valuePropName="checked" noStyle>
+              <Switch />
+            </Form.Item>
+          </ConfigField>
+          <ConfigField
+            label="HLS Keystream"
+            description="仅 HLS 直录引擎使用；一般留空，站点轮换密钥导致解析失败时再手动填写。"
+          >
+            <Form.Item name={['feature', 'hls_keystream']} noStyle>
+              <Input.Password placeholder="留空使用内置或缓存值" style={{ width: 520 }} />
+            </Form.Item>
+          </ConfigField>
+          <ConfigField
+            label="HLS PKey"
+            description="仅 HLS 直录引擎使用；一般留空。"
+          >
+            <Form.Item name={['feature', 'hls_pkey']} noStyle>
+              <Input.Password placeholder="留空使用内置或缓存值" style={{ width: 520 }} />
+            </Form.Item>
+          </ConfigField>
         </Card>
 
         {/* 流偏好配置 */}
@@ -678,12 +786,28 @@ const GlobalSettings: React.FC<{
               <Input placeholder="如: 500MB, 1GB, 0" style={{ width: 200 }} />
             </Form.Item>
           </ConfigField>
+          <ConfigField
+            label="最大录制会话时长 (秒)"
+            description="单次录制达到该墙钟时长后停止录制并停止监听；0 表示不限制。不同于最大时长分段，它不会继续自动重录。"
+          >
+            <Form.Item
+              name={['video_split_strategies', 'max_record_duration']}
+              rules={[{ type: 'number', min: 0, message: '不能为负数' }]}
+            >
+              <InputNumber min={0} style={{ width: 200 }} />
+            </Form.Item>
+          </ConfigField>
         </Card>
 
         {/* 录制完成后动作 */}
         <Card title="录制完成后动作" size="small" style={{ marginBottom: 16 }}>
           <ConfigField label="修复 FLV 文件" description="录制完成后自动修复 FLV 文件">
             <Form.Item name={['on_record_finished', 'fix_flv_at_first']} valuePropName="checked" noStyle>
+              <Switch />
+            </Form.Item>
+          </ConfigField>
+          <ConfigField label="保存封面图" description="录制完成后保存视频第一帧作为 .jpg 封面">
+            <Form.Item name={['on_record_finished', 'save_cover']} valuePropName="checked" noStyle>
               <Switch />
             </Form.Item>
           </ConfigField>
@@ -704,6 +828,31 @@ const GlobalSettings: React.FC<{
           </ConfigField>
           <ConfigField label="烧录弹幕字幕" description="将 ASS 弹幕字幕硬编码到视频中（需要开启弹幕录制）">
             <Form.Item name={['on_record_finished', 'burn_subtitles']} valuePropName="checked" noStyle>
+              <Switch />
+            </Form.Item>
+          </ConfigField>
+          <ConfigField label="烧录视频编码器" description="字幕烧录时使用的视频编码器">
+            <Form.Item name={['on_record_finished', 'burn_subtitles_codec']} noStyle>
+              <Input placeholder="默认: libx264" style={{ width: 240 }} />
+            </Form.Item>
+          </ConfigField>
+          <ConfigField label="烧录 CRF" description="数值越小质量越高、文件越大；libx264 常用 18-23">
+            <Form.Item name={['on_record_finished', 'burn_subtitles_crf']} noStyle>
+              <Input placeholder="默认: 18" style={{ width: 160 }} />
+            </Form.Item>
+          </ConfigField>
+          <ConfigField label="烧录编码预设" description="例如 ultrafast、veryfast、medium、slow">
+            <Form.Item name={['on_record_finished', 'burn_subtitles_preset']} noStyle>
+              <Input placeholder="默认: medium" style={{ width: 200 }} />
+            </Form.Item>
+          </ConfigField>
+          <ConfigField label="烧录后删除 ASS" description="字幕烧录成功后删除 ASS 字幕文件">
+            <Form.Item name={['on_record_finished', 'burn_delete_ass']} valuePropName="checked" noStyle>
+              <Switch />
+            </Form.Item>
+          </ConfigField>
+          <ConfigField label="烧录后删除源视频" description="字幕烧录成功后删除原始视频文件；开启前请确认流程稳定">
+            <Form.Item name={['on_record_finished', 'burn_delete_source']} valuePropName="checked" noStyle>
               <Switch />
             </Form.Item>
           </ConfigField>
@@ -739,6 +888,14 @@ const GlobalSettings: React.FC<{
           >
             <Form.Item name="tool_root_folder" noStyle>
               <Input placeholder="留空使用默认目录" style={{ width: 400 }} />
+            </Form.Item>
+          </ConfigField>
+          <ConfigField
+            label="任务队列并发数"
+            description="后处理、上传等 Pipeline 任务同时执行的最大数量"
+          >
+            <Form.Item name={['task_queue', 'max_concurrent']} noStyle>
+              <InputNumber min={1} max={32} style={{ width: 200 }} />
             </Form.Item>
           </ConfigField>
         </Card>
@@ -904,6 +1061,30 @@ const NotifySettings: React.FC<{
           <ConfigField label="推送录制摘要" description="录制结束后推送文件数量、文件名和大小等信息">
             <Form.Item name={['send_recording_summary']} valuePropName="checked" noStyle>
               <Switch />
+            </Form.Item>
+          </ConfigField>
+        </Card>
+
+        {/* Ntfy 通知 */}
+        <Card title={<><BellOutlined /> Ntfy 通知</>} size="small" style={{ marginBottom: 16 }}>
+          <ConfigField label="启用" description="开启后会通过 Ntfy 推送直播开始/结束通知">
+            <Form.Item name={['ntfy', 'enable']} valuePropName="checked" noStyle>
+              <Switch />
+            </Form.Item>
+          </ConfigField>
+          <ConfigField label="服务地址 / Topic" description="例如：https://ntfy.sh/your-topic 或自建服务的 topic 地址">
+            <Form.Item name={['ntfy', 'URL']} noStyle>
+              <Input placeholder="https://ntfy.sh/your-topic" style={{ width: 420 }} />
+            </Form.Item>
+          </ConfigField>
+          <ConfigField label="访问 Token" description="私有 Topic 或自建服务需要鉴权时填写">
+            <Form.Item name={['ntfy', 'token']} noStyle>
+              <Input.Password placeholder="可选" style={{ width: 320 }} />
+            </Form.Item>
+          </ConfigField>
+          <ConfigField label="标签" description="Ntfy 消息标签，可选">
+            <Form.Item name={['ntfy', 'tag']} noStyle>
+              <Input placeholder="例如: tv,warning" style={{ width: 260 }} />
             </Form.Item>
           </ConfigField>
         </Card>

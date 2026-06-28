@@ -20,7 +20,8 @@ import {
     CommentOutlined,
     LogoutOutlined,
     MoonOutlined,
-    SunOutlined
+    SunOutlined,
+    VerticalAlignTopOutlined
 } from '@ant-design/icons';
 import './layout.css';
 import { ResolvedThemeMode, ThemeMode, ThemePalette } from '../../utils/settings';
@@ -40,12 +41,15 @@ interface Props {
 interface State {
     collapsed: boolean;
     loggingOut: boolean;
+    showBackTop: boolean;
 }
 
 // localStorage key 用于保存侧边栏收起状态
 const SIDER_COLLAPSED_KEY = 'siderCollapsed';
 
 class RootLayout extends React.Component<Props, State> {
+    private contentScrollTarget: HTMLElement | null = null;
+
     constructor(props: Props) {
         super(props);
         // 从 localStorage 读取收起状态
@@ -58,8 +62,62 @@ class RootLayout extends React.Component<Props, State> {
         } catch (e) {
             console.error('读取侧边栏状态失败:', e);
         }
-        this.state = { collapsed, loggingOut: false };
+        this.state = { collapsed, loggingOut: false, showBackTop: false };
     }
+
+    componentDidMount() {
+        const target = this.getContentScrollTarget();
+        if (target) {
+            target.addEventListener('scroll', this.handleContentScroll, { passive: true });
+        }
+        document.addEventListener('scroll', this.handleContentScroll, { passive: true, capture: true });
+        window.addEventListener('scroll', this.handleContentScroll, { passive: true });
+        this.handleContentScroll();
+        window.requestAnimationFrame(this.handleContentScroll);
+    }
+
+    componentWillUnmount() {
+        if (this.contentScrollTarget) {
+            this.contentScrollTarget.removeEventListener('scroll', this.handleContentScroll);
+            this.contentScrollTarget = null;
+        }
+        document.removeEventListener('scroll', this.handleContentScroll, true);
+        window.removeEventListener('scroll', this.handleContentScroll);
+    }
+
+    getContentScrollTarget = () => {
+        if (this.contentScrollTarget && document.body.contains(this.contentScrollTarget)) {
+            return this.contentScrollTarget;
+        }
+        this.contentScrollTarget = document.querySelector('.app-content') as HTMLElement | null;
+        return this.contentScrollTarget;
+    };
+
+    handleContentScroll = () => {
+        const target = this.getContentScrollTarget();
+        const scrollTop = Math.max(
+            window.scrollY || 0,
+            document.documentElement.scrollTop || 0,
+            document.body.scrollTop || 0,
+            document.scrollingElement?.scrollTop || 0,
+            target?.scrollTop || 0,
+        );
+        const nextVisible = scrollTop > 240;
+        if (nextVisible !== this.state.showBackTop) {
+            this.setState({ showBackTop: nextVisible });
+        }
+    };
+
+    scrollBackToTop = () => {
+        const target = this.getContentScrollTarget();
+        if (target) {
+            target.scrollTo({ top: 0, behavior: 'smooth' });
+        }
+        document.scrollingElement?.scrollTo({ top: 0, behavior: 'smooth' });
+        document.documentElement.scrollTo({ top: 0, behavior: 'smooth' });
+        document.body.scrollTo({ top: 0, behavior: 'smooth' });
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+    };
 
     toggleCollapsed = () => {
         const collapsed = !this.state.collapsed;
@@ -84,7 +142,7 @@ class RootLayout extends React.Component<Props, State> {
     };
 
     render() {
-        const { collapsed, loggingOut } = this.state;
+        const { collapsed, loggingOut, showBackTop } = this.state;
         const {
             themeMode,
             resolvedThemeMode,
@@ -295,6 +353,16 @@ class RootLayout extends React.Component<Props, State> {
                                 }}>
                                 {this.props.children}
                             </Content>
+                            <Tooltip title="回到顶部" placement="left">
+                                <Button
+                                    type="default"
+                                    shape="circle"
+                                    aria-label="回到顶部"
+                                    className={`app-back-top ${showBackTop ? 'is-visible' : ''}`}
+                                    icon={<VerticalAlignTopOutlined />}
+                                    onClick={this.scrollBackToTop}
+                                />
+                            </Tooltip>
                         </Layout>
                     </Layout>
                 </Layout>

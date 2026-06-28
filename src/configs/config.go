@@ -393,7 +393,7 @@ const (
 // CloudUpload 云上传配置
 type CloudUpload struct {
 	Enable             bool     `yaml:"enable" json:"enable"`                                               // 是否启用云上传
-	StorageName        string   `yaml:"storage_name" json:"storage_name"`                                   // 使用的 OpenList 存储名称
+	StorageName        string   `yaml:"storage_name" json:"storage_name"`                                   // 使用的 OpenList 存储位置
 	UploadPathTmpl     string   `yaml:"upload_path_tmpl" json:"upload_path_tmpl"`                           // 上传路径模板
 	DeleteAfterUpload  bool     `yaml:"delete_after_upload" json:"delete_after_upload"`                     // 上传成功后删除本地文件
 	AdditionalStorages []string `yaml:"additional_storages,omitempty" json:"additional_storages,omitempty"` // 额外存储（支持多目标上传）
@@ -491,13 +491,17 @@ var defaultProxy = Proxy{
 
 // OpenListConfig OpenList 服务配置
 type OpenListConfig struct {
-	Port     int    `yaml:"port" json:"port"`           // OpenList 监听端口（默认 5244）
-	DataPath string `yaml:"data_path" json:"data_path"` // OpenList 数据目录（留空使用默认路径）
+	Port          int    `yaml:"port" json:"port"`                     // OpenList 监听端口（默认 5244）
+	DataPath      string `yaml:"data_path" json:"data_path"`           // OpenList 数据目录（留空使用默认路径）
+	ExternalURL   string `yaml:"external_url" json:"external_url"`     // 外部 OpenList 服务地址；填写后不再下载/启动内置 OpenList
+	ExternalToken string `yaml:"external_token" json:"external_token"` // 外部 OpenList API Token；用于存储列表/健康检查/上传
 }
 
 var defaultOpenListConfig = OpenListConfig{
-	Port:     5244,
-	DataPath: "", // 默认使用 AppDataPath/openlist
+	Port:          5244,
+	DataPath:      "", // 默认使用 AppDataPath/openlist
+	ExternalURL:   "",
+	ExternalToken: "",
 }
 
 // UpdateConfig 自动更新配置
@@ -970,7 +974,7 @@ var defaultConfig = Config{
 		CloudUpload: CloudUpload{
 			Enable:            false,
 			StorageName:       "",
-			UploadPathTmpl:    "/录播归档/{{ .Platform }}/{{ .HostName }}/{{ .RoomName }}-{{ now | date \"2006-01-02\" }}.{{ .Ext }}",
+			UploadPathTmpl:    "/录播归档/{{ .Platform }}/{{ .HostName }}/{{ .RoomName }}/{{ .FileName }}",
 			DeleteAfterUpload: false,
 		},
 		UploadTiming:        UploadTimingAfterProcess,

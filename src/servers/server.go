@@ -147,6 +147,7 @@ func initMux(ctx context.Context) *mux.Router {
 	// OpenList (云上传) API 路由
 	apiRoute.HandleFunc("/openlist/status", getOpenListStatus).Methods("GET")
 	apiRoute.HandleFunc("/openlist/check-storage", checkOpenListStorageHealth).Methods("GET")
+	apiRoute.HandleFunc("/openlist/validate", validateOpenListConfig).Methods("POST")
 
 	// Pipeline 任务路由
 	inst := instance.GetInstance(ctx)
@@ -181,6 +182,7 @@ func initMux(ctx context.Context) *mux.Router {
 
 	// /tools/ 动态反向代理：当 tools WebUI 端口未就绪时返回 503，
 	// 一旦端口出现或变化，热更新为对应端口的反向代理。
+	m.HandleFunc("/tools/api/status", handleToolsFastStatus).Methods(http.MethodGet)
 	dyn := &dynamicHandler{}
 	// 设置初始占位 handler（使用统一的包装类型）
 	dyn.h.Store(handlerHolder{H: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

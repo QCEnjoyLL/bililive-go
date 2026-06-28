@@ -802,7 +802,7 @@ const webAuthLoginHTML = `<!doctype html>
       makeAccentPalette('vercel', 'Vercel', '#111827', '#0f172a', 'rgba(17, 24, 39, 0.16)', '#f5f5f5', '#ffffff', 'rgba(245, 245, 245, 0.20)', { 'page': '#fafafa', 'panel-strong': '#f0f0f0', 'ink': '#111827', 'line': '#dedede' }, { 'button-text': '#171717', 'page': '#171717', 'panel': '#1f1f1f', 'panel-strong': '#202020', 'ink': '#f5f5f5', 'line': '#3f3f3f' }),
       makeAccentPalette('vs-code-plus', 'VS Code Plus', '#007acc', '#0067ad', 'rgba(0, 122, 204, 0.18)', '#007acc', '#2499e8', 'rgba(0, 122, 204, 0.24)', { 'page': '#f3f3f3', 'panel-strong': '#ebebeb', 'ink': '#1f1f1f', 'line': '#d4d4d4' }, { 'page': '#1e1e1e', 'panel': '#252526', 'panel-strong': '#252526', 'ink': '#cccccc', 'line': '#3c3c3c' }),
       makeAccentPalette('xcode', 'Xcode', '#007aff', '#005ecb', 'rgba(0, 122, 255, 0.18)', '#0a84ff', '#5eb1ff', 'rgba(10, 132, 255, 0.24)', { 'page': '#f7fbff', 'panel-strong': '#edf5ff', 'ink': '#1d1d1f', 'line': '#d5e3f5' }, { 'page': '#242833', 'panel': '#2b303d', 'panel-strong': '#20242e', 'ink': '#f2f2f7', 'line': '#465066' })
-    ];
+    ].sort((a, b) => a.key.localeCompare(b.key));
     const MODES = [
       { key: 'system', label: '系统' },
       { key: 'light', label: '浅色' },
@@ -818,7 +818,7 @@ const webAuthLoginHTML = `<!doctype html>
     }
 
     function findPalette(key) {
-      return PALETTES.find((item) => item.key === key) || PALETTES[0];
+      return PALETTES.find((item) => item.key === key) || PALETTES.find((item) => item.key === 'one') || PALETTES[0];
     }
 
     function resolveMode(mode) {

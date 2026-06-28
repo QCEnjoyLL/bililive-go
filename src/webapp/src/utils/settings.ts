@@ -20,7 +20,6 @@ export interface LocalSettings {
 export type ThemeMode = 'system' | 'light' | 'dark';
 export type ResolvedThemeMode = 'light' | 'dark';
 export const THEME_PALETTE_KEYS = [
-  'one',
   'absolutely',
   'ayu',
   'catppuccin',
@@ -37,6 +36,7 @@ export const THEME_PALETTE_KEYS = [
   'night-owl',
   'nord',
   'notion',
+  'one',
   'oscurance',
   'raycast',
   'rose-pine',

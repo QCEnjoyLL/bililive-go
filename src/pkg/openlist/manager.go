@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -22,6 +23,8 @@ type Manager struct {
 	dataPath    string
 	port        int
 	apiEndpoint string
+	apiToken    string
+	external    bool
 	process     *exec.Cmd
 
 	mu      sync.Mutex
@@ -41,12 +44,36 @@ func NewManager(dataPath string, port int) *Manager {
 	}
 }
 
+// NewExternalManager 创建连接外部 OpenList 服务的管理器。
+func NewExternalManager(endpoint, token string) *Manager {
+	return &Manager{
+		apiEndpoint: strings.TrimRight(strings.TrimSpace(endpoint), "/"),
+		apiToken:    strings.TrimSpace(token),
+		external:    true,
+	}
+}
+
 // Start 启动 OpenList 服务
 func (m *Manager) Start(ctx context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	if m.running {
+		return nil
+	}
+
+	if m.external {
+		if m.apiEndpoint == "" {
+			return fmt.Errorf("外部 OpenList 地址为空")
+		}
+		if err := m.waitForReady(ctx, 10*time.Second); err != nil {
+			return fmt.Errorf("连接外部 OpenList 失败: %w", err)
+		}
+		if err := webui.RegisterToolWebUI("openlist", m.apiEndpoint); err != nil {
+			logrus.WithError(err).Warn("注册外部 OpenList Web UI 代理失败")
+		}
+		m.running = true
+		logrus.WithField("endpoint", m.apiEndpoint).Info("已连接外部 OpenList")
 		return nil
 	}
 
@@ -182,12 +209,14 @@ func (m *Manager) stopInternal() error {
 		return nil
 	}
 
-	close(m.stopCh)
+	if m.stopCh != nil {
+		close(m.stopCh)
+	}
 
 	// 取消注册代理
 	webui.UnregisterToolWebUI("openlist")
 
-	if m.process != nil && m.process.Process != nil {
+	if !m.external && m.process != nil && m.process.Process != nil {
 		m.process.Process.Kill()
 	}
 
@@ -206,6 +235,16 @@ func (m *Manager) IsRunning() bool {
 // GetAPIEndpoint 获取 API 地址
 func (m *Manager) GetAPIEndpoint() string {
 	return m.apiEndpoint
+}
+
+// GetAPIToken 获取 OpenList API Token。
+func (m *Manager) GetAPIToken() string {
+	return m.apiToken
+}
+
+// IsExternal 返回是否连接外部 OpenList 服务。
+func (m *Manager) IsExternal() bool {
+	return m.external
 }
 
 // GetWebUIPath 获取 Web UI 访问路径（通过反向代理）

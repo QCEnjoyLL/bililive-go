@@ -6,20 +6,22 @@ import (
 
 // 内置阶段名称常量
 const (
-	StageNameFixFlv         = "fix_flv"
-	StageNameConvertMp4     = "convert_mp4"
-	StageNameExtractCover   = "extract_cover"
-	StageNameCloudUpload    = "cloud_upload"
-	StageNameCustomCmd      = "custom_command"
-	StageNameBurnSubtitles  = "burn_subtitles"
+	StageNameFixFlv        = "fix_flv"
+	StageNameConvertMp4    = "convert_mp4"
+	StageNameExtractCover  = "extract_cover"
+	StageNameCloudUpload   = "cloud_upload"
+	StageNameCustomCmd     = "custom_command"
+	StageNameBurnSubtitles = "burn_subtitles"
 )
 
 // 阶段选项键常量
 const (
 	// OptionDeleteSource 是否删除源文件
 	OptionDeleteSource = "delete_source"
-	// OptionStorage 云存储名称
+	// OptionStorage 云存储位置
 	OptionStorage = "storage"
+	// OptionAdditionalStorages 额外云存储位置
+	OptionAdditionalStorages = "additional_storages"
 	// OptionPathTemplate 上传路径模板
 	OptionPathTemplate = "path_template"
 	// OptionDeleteAfter 上传后是否删除
@@ -93,10 +95,10 @@ func ConvertLegacyConfig(legacy *configs.OnRecordFinished) *PipelineConfig {
 		stages = append(stages, StageConfig{
 			Name: StageNameBurnSubtitles,
 			Options: map[string]any{
-				OptionCodec:           legacy.BurnSubtitlesCodec,
-				OptionCrf:             legacy.BurnSubtitlesCrf,
-				OptionPreset:          legacy.BurnSubtitlesPreset,
-				OptionBurnDeleteAss:   legacy.BurnDeleteAss,
+				OptionCodec:            legacy.BurnSubtitlesCodec,
+				OptionCrf:              legacy.BurnSubtitlesCrf,
+				OptionPreset:           legacy.BurnSubtitlesPreset,
+				OptionBurnDeleteAss:    legacy.BurnDeleteAss,
 				OptionBurnDeleteSource: legacy.BurnDeleteSource,
 			},
 		})
@@ -114,9 +116,10 @@ func ConvertLegacyConfig(legacy *configs.OnRecordFinished) *PipelineConfig {
 		stages = append(stages, StageConfig{
 			Name: StageNameCloudUpload,
 			Options: map[string]any{
-				OptionStorage:      legacy.CloudUpload.StorageName,
-				OptionPathTemplate: legacy.CloudUpload.UploadPathTmpl,
-				OptionDeleteAfter:  legacy.CloudUpload.DeleteAfterUpload,
+				OptionStorage:            legacy.CloudUpload.StorageName,
+				OptionAdditionalStorages: legacy.CloudUpload.AdditionalStorages,
+				OptionPathTemplate:       legacy.CloudUpload.UploadPathTmpl,
+				OptionDeleteAfter:        legacy.CloudUpload.DeleteAfterUpload,
 			},
 		})
 	}

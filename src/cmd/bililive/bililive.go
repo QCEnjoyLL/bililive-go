@@ -7,6 +7,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -361,33 +362,43 @@ func main() {
 
 	ed := inst.EventDispatcher.(events.Dispatcher)
 
-	// 如果启用了云上传功能，初始化 OpenList 管理器
+	// 如果启用了云上传功能或配置了外部 OpenList，初始化 OpenList 管理器
 	var openlistManager *openlist.Manager
-	if config.OnRecordFinished.CloudUpload.Enable {
-		// 获取 OpenList 数据目录
-		openlistDataPath := config.OpenList.DataPath
-		if openlistDataPath == "" {
-			openlistDataPath = filepath.Join(config.AppDataPath, "openlist")
-		}
-		openlistPort := config.OpenList.Port
-		if openlistPort == 0 {
-			openlistPort = 5244
-		}
+	openlistExternalURL := strings.TrimSpace(config.OpenList.ExternalURL)
+	if config.OnRecordFinished.CloudUpload.Enable || openlistExternalURL != "" {
+		if openlistExternalURL != "" {
+			openlistManager = openlist.NewExternalManager(openlistExternalURL, config.OpenList.ExternalToken)
+		} else {
+			// 获取 OpenList 数据目录
+			openlistDataPath := config.OpenList.DataPath
+			if openlistDataPath == "" {
+				openlistDataPath = filepath.Join(config.AppDataPath, "openlist")
+			}
+			openlistPort := config.OpenList.Port
+			if openlistPort == 0 {
+				openlistPort = 5244
+			}
 
-		// 创建 OpenList 管理器
-		openlistManager = openlist.NewManager(openlistDataPath, openlistPort)
+			// 创建 OpenList 管理器
+			openlistManager = openlist.NewManager(openlistDataPath, openlistPort)
+		}
 
 		// 在后台启动 OpenList
 		bilisentryPkg.Go(func() {
 			if err := openlistManager.Start(rootCtx); err != nil {
-				logger.WithError(err).Error("启动 OpenList 失败，云上传功能将不可用")
+				logger.WithError(err).Error("启动 OpenList 失败，OpenList 相关功能将不可用")
 			}
 		})
 
 		// 设置全局 OpenList 管理器供 API 和 Pipeline 使用
 		servers.SetOpenListManager(openlistManager)
+		stages.SetOpenListProvider(openlistManager)
 
-		logger.Info("云上传功能已启用")
+		if config.OnRecordFinished.CloudUpload.Enable {
+			logger.Info("云上传功能已启用")
+		} else {
+			logger.Info("外部 OpenList 已配置，将注册到工具入口")
+		}
 	}
 
 	// 初始化 Pipeline 管道管理器

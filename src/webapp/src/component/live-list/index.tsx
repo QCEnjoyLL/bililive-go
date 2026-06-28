@@ -129,11 +129,11 @@ const StreamListWithFilter: React.FC<StreamListWithFilterProps> = ({
         };
 
         return (
-            <List.Item key={index} style={{
-                padding: '6px 0',
-                borderBottom: '1px dashed #f0f0f0',
-                backgroundColor: isCurrentStream ? '#f6ffed' : undefined
-            }}>
+            <List.Item
+                key={index}
+                className={`stream-list-item ${isCurrentStream ? 'is-current' : ''}`}
+                style={{ padding: '6px 0' }}
+            >
                 <div style={{ width: '100%', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <div style={{ flexGrow: 1 }}>
                         {/* 第一行：序号和所有从 attributes 渲染的标签 */}
@@ -168,7 +168,7 @@ const StreamListWithFilter: React.FC<StreamListWithFilterProps> = ({
                         </Space>
                         {/* 第二行：如果有 description，单独显示 */}
                         {stream.description && stream.description !== stream.quality && (
-                            <div style={{ marginTop: 4, fontSize: 12, color: '#666', paddingLeft: 8 }}>
+                            <div className="stream-description" style={{ marginTop: 4, fontSize: 12, paddingLeft: 8 }}>
                                 <span style={{ fontStyle: 'italic' }}>ℹ️ {stream.description}</span>
                             </div>
                         )}
@@ -226,14 +226,8 @@ const StreamListWithFilter: React.FC<StreamListWithFilterProps> = ({
         <>
             {/* 属性过滤器 */}
             {allKeys.length > 0 && (
-                <div style={{
-                    padding: '12px',
-                    marginBottom: '12px',
-                    backgroundColor: '#fafafa',
-                    borderRadius: '4px',
-                    border: '1px solid #e8e8e8'
-                }}>
-                    <div style={{ marginBottom: '8px', fontWeight: 500, color: '#666' }}>
+                <div className="stream-filter-panel">
+                    <div className="stream-filter-title">
                         🔍 流属性过滤器
                     </div>
                     <Space direction="vertical" style={{ width: '100%' }} size="small">
@@ -253,19 +247,13 @@ const StreamListWithFilter: React.FC<StreamListWithFilterProps> = ({
                                             <Select.Option key={v} value={v}>{v}</Select.Option>
                                         ))}
                                     </Select>
-                                    <span style={{ color: '#999', fontSize: '12px' }}>
+                                    <span className="stream-filter-count">
                                         ({validValues.length} 个选项)
                                     </span>
                                 </Space>
                             );
                         })}
-                        <div style={{
-                            color: '#1890ff',
-                            fontSize: '13px',
-                            marginTop: '4px',
-                            paddingTop: '8px',
-                            borderTop: '1px dashed #d9d9d9'
-                        }}>
+                        <div className="stream-filter-result">
                             筛选结果：{filteredStreams.length} / {availableStreams.length} 个流
                         </div>
                     </Space>
@@ -283,8 +271,28 @@ const StreamListWithFilter: React.FC<StreamListWithFilterProps> = ({
     );
 };
 
-// 使用动态获取的刷新间隔；列表运行状态最高 15 秒刷新一次。
-const getListStatusRefreshTime = () => Math.max(5 * 1000, Math.min(getPollIntervalMs(), 15 * 1000));
+// 使用动态获取的刷新间隔；列表运行状态最高 5 秒刷新一次。
+const LIST_STATUS_REFRESH_MIN_MS = 3 * 1000;
+const LIST_STATUS_REFRESH_MAX_MS = 5 * 1000;
+const getListStatusRefreshTime = () => Math.max(LIST_STATUS_REFRESH_MIN_MS, Math.min(getPollIntervalMs(), LIST_STATUS_REFRESH_MAX_MS));
+const LIVE_LIST_AUTO_REFRESH_KEY = 'liveListAutoRefreshEnabled';
+
+const isLiveListAutoRefreshEnabled = () => {
+    try {
+        const value = localStorage.getItem(LIVE_LIST_AUTO_REFRESH_KEY);
+        return value === null ? true : value === 'true';
+    } catch (e) {
+        return true;
+    }
+};
+
+const setLiveListAutoRefreshEnabled = (enabled: boolean) => {
+    try {
+        localStorage.setItem(LIVE_LIST_AUTO_REFRESH_KEY, String(enabled));
+    } catch (e) {
+        console.error('保存直播间列表自动刷新设置失败:', e);
+    }
+};
 
 interface Props {
     navigate: NavigateFunction;
@@ -317,6 +325,8 @@ interface IState {
     sortedInfo: { columnKey: string | null; order: 'ascend' | 'descend' | null }, // 表格排序状态
     danmakuMessages: { [key: string]: DanmakuMessage[] }, // roomId -> 弹幕消息列表
     expandedActiveTabs: { [key: string]: string }, // roomId -> 当前激活的 tab key
+    autoRefreshEnabled: boolean, // 是否自动刷新直播间列表状态
+    isListRefreshing: boolean, // 直播间列表是否正在手动刷新
 }
 
 interface ItemData {
@@ -359,6 +369,7 @@ class LiveList extends React.Component<Props, IState> {
 
     private listRequestInFlight = false;
     private pendingListRefresh = false;
+    private pendingListRefreshShowLoading = false;
 
     //倒计时定时器
     countdownTimer!: NodeJS.Timeout;
@@ -633,10 +644,38 @@ class LiveList extends React.Component<Props, IState> {
             sortedInfo: savedSortedInfo,
             danmakuMessages: {},
             expandedActiveTabs: {},
+            autoRefreshEnabled: isLiveListAutoRefreshEnabled(),
+            isListRefreshing: false,
         }
     }
 
     pendingRoomId: string | null = null;
+
+    restartListAutoRefreshTimer = () => {
+        if (this.timer) {
+            clearInterval(this.timer);
+        }
+        if (!this.state.autoRefreshEnabled) {
+            return;
+        }
+        this.timer = setInterval(() => {
+            this.requestData("livelist");
+        }, getListStatusRefreshTime());
+    }
+
+    toggleListAutoRefresh = (enabled: boolean) => {
+        setLiveListAutoRefreshEnabled(enabled);
+        this.setState({ autoRefreshEnabled: enabled }, () => {
+            this.restartListAutoRefreshTimer();
+            if (enabled) {
+                this.requestListData(true, false);
+            }
+        });
+    }
+
+    handleListRefreshClick = () => {
+        this.requestListData(true, true);
+    }
 
     // 监听localStorage设置变化的处理函数
     handleLocalSettingsChange = (event: CustomEvent) => {
@@ -650,18 +689,12 @@ class LiveList extends React.Component<Props, IState> {
                     // 启用SSE，设置SSE订阅
                     this.setupListSSE();
                     // 列表运行状态仍保持短轮询，避免 SSE 漏事件时状态长期停留。
-                    clearInterval(this.timer);
-                    this.timer = setInterval(() => {
-                        this.requestData("livelist");
-                    }, getListStatusRefreshTime());
+                    this.restartListAutoRefreshTimer();
                 } else {
                     // 禁用SSE，取消订阅
                     this.cleanupListSSE();
-                    // 恢复轮询刷新，列表运行状态最高 15 秒更新一次。
-                    clearInterval(this.timer);
-                    this.timer = setInterval(() => {
-                        this.requestData("livelist");
-                    }, getListStatusRefreshTime());
+                    // 恢复轮询刷新，列表运行状态最高 5 秒更新一次。
+                    this.restartListAutoRefreshTimer();
                 }
             });
         }
@@ -687,10 +720,7 @@ class LiveList extends React.Component<Props, IState> {
         });
 
         // 设置列表运行状态轮询定时器；SSE 作为即时刷新，轮询作为可靠兜底。
-        const refreshInterval = getListStatusRefreshTime();
-        this.timer = setInterval(() => {
-            this.requestData("livelist"); // Call with a specific targetKey
-        }, refreshInterval);
+        this.restartListAutoRefreshTimer();
 
         // 启动倒计时定时器，每秒更新一次
         this.countdownTimer = setInterval(() => {
@@ -934,7 +964,7 @@ class LiveList extends React.Component<Props, IState> {
      * 刷新页面数据
      */
     refresh = () => {
-        this.requestListData(true);
+        this.requestListData(true, true);
     }
 
     refreshCookie = () => {
@@ -944,14 +974,19 @@ class LiveList extends React.Component<Props, IState> {
     /**
      * 加载列表数据
      */
-    requestListData(force = false) {
+    requestListData(force = false, showLoading = false) {
+        if (showLoading) {
+            this.setState({ isListRefreshing: true });
+        }
         if (this.listRequestInFlight) {
             if (force) {
                 this.pendingListRefresh = true;
+                this.pendingListRefreshShowLoading = this.pendingListRefreshShowLoading || showLoading;
             }
             return;
         }
         this.pendingListRefresh = false;
+        this.pendingListRefreshShowLoading = false;
         this.listRequestInFlight = true;
         api.getRoomList()
             .then(function (rsp: any) {
@@ -1041,7 +1076,12 @@ class LiveList extends React.Component<Props, IState> {
             .finally(() => {
                 this.listRequestInFlight = false;
                 if (this.pendingListRefresh) {
-                    this.requestListData(true);
+                    const pendingShowLoading = this.pendingListRefreshShowLoading;
+                    this.pendingListRefresh = false;
+                    this.pendingListRefreshShowLoading = false;
+                    this.requestListData(true, pendingShowLoading);
+                } else if (showLoading) {
+                    this.setState({ isListRefreshing: false });
                 }
             });
     }
@@ -1474,7 +1514,7 @@ class LiveList extends React.Component<Props, IState> {
             display: 'flex',
             alignItems: 'center',
             padding: '6px 12px',
-            borderBottom: '1px solid #f0f0f0',
+            borderBottom: '1px solid var(--bgo-border-soft)',
             minWidth: 0,
         };
 
@@ -1482,7 +1522,7 @@ class LiveList extends React.Component<Props, IState> {
             width: '120px',
             flexShrink: 0,
             fontWeight: 500,
-            color: '#666',
+            color: 'var(--bgo-muted)',
         };
 
         // 获取刷新状态的显示文本和颜色
@@ -1708,7 +1748,7 @@ class LiveList extends React.Component<Props, IState> {
                                         <div style={{
                                             marginTop: 8,
                                             padding: '8px 12px',
-                                            background: '#f5f5f5',
+                                            background: 'var(--bgo-elevated-bg)',
                                             borderRadius: 6,
                                             fontSize: '12px',
                                             lineHeight: '1.6',
@@ -1718,10 +1758,10 @@ class LiveList extends React.Component<Props, IState> {
                                                 <strong>流 URL：</strong>
                                                 <div style={{
                                                     fontFamily: 'monospace',
-                                                    background: '#fff',
+                                                    background: 'var(--bgo-panel-bg)',
                                                     padding: '6px 8px',
                                                     borderRadius: 4,
-                                                    border: '1px solid #e8e8e8',
+                                                    border: '1px solid var(--bgo-border)',
                                                     marginTop: 4,
                                                     whiteSpace: 'pre-wrap',
                                                 }}>
@@ -1733,10 +1773,10 @@ class LiveList extends React.Component<Props, IState> {
                                                     <strong>Headers：</strong>
                                                     <div style={{
                                                         fontFamily: 'monospace',
-                                                        background: '#fff',
+                                                        background: 'var(--bgo-panel-bg)',
                                                         padding: '6px 8px',
                                                         borderRadius: 4,
-                                                        border: '1px solid #e8e8e8',
+                                                        border: '1px solid var(--bgo-border)',
                                                         marginTop: 4,
                                                     }}>
                                                         {Object.entries(detail.recorder_status.stream_headers as Record<string, string>).map(
@@ -1890,7 +1930,7 @@ class LiveList extends React.Component<Props, IState> {
                                         dataSource={detail.conn_stats}
                                         split={false}
                                         renderItem={(item: any) => (
-                                            <List.Item style={{ padding: '6px 0', borderBottom: '1px dashed #f0f0f0' }}>
+                                            <List.Item className="stream-list-item" style={{ padding: '6px 0' }}>
                                                 <div style={{ width: '100%' }}>
                                                     <Text strong style={{ fontSize: 13 }}>{item.host}</Text>
                                                     <div style={{ marginTop: 4 }}>
@@ -1968,11 +2008,11 @@ class LiveList extends React.Component<Props, IState> {
         return (
             <div style={{
                 margin: '8px 16px 16px',
-                border: '1px solid #d9d9d9',
+                border: '1px solid var(--bgo-border)',
                 borderRadius: '6px',
-                backgroundColor: '#fff',
-                boxShadow: '0 2px 8px rgba(0,0,0,0.06)'
-            }}>
+                backgroundColor: 'var(--bgo-panel-bg)',
+                boxShadow: '0 2px 8px rgba(0,0,0,0.12)'
+            }} className="live-expanded-panel">
                 <Tabs
                     defaultActiveKey="runtime"
                     size="small"
@@ -1981,8 +2021,8 @@ class LiveList extends React.Component<Props, IState> {
                     tabBarStyle={{
                         margin: 0,
                         padding: '0 12px',
-                        backgroundColor: '#fafafa',
-                        borderBottom: '1px solid #e8e8e8',
+                        backgroundColor: 'var(--bgo-elevated-bg)',
+                        borderBottom: '1px solid var(--bgo-border)',
                         borderRadius: '6px 6px 0 0'
                     }}
                     onChange={(key) => {
@@ -2078,7 +2118,7 @@ class LiveList extends React.Component<Props, IState> {
     }
 
     render() {
-        const { list } = this.state;
+        const { list, autoRefreshEnabled, isListRefreshing } = this.state;
         this.columns.forEach((column: ColumnsType<ItemData>[number]) => {
             if (column.key === 'address') {
                 // 直播平台去重数组
@@ -2109,7 +2149,25 @@ class LiveList extends React.Component<Props, IState> {
                                 <span style={{ fontSize: '20px', fontWeight: 600, color: 'rgba(0,0,0,0.85)', marginRight: 12 }}>直播间列表</span>
                                 <span style={{ fontSize: '14px', color: 'rgba(0,0,0,0.45)' }}>Room List</span>
                             </div>
-                            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                            <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                                <Tooltip title={autoRefreshEnabled ? "自动刷新已开启：约每 5 秒同步列表状态，不刷新网页" : "自动刷新已关闭：点击可重新开启定时同步"}>
+                                    <Button
+                                        type={autoRefreshEnabled ? "primary" : "default"}
+                                        icon={<SyncOutlined spin={autoRefreshEnabled} />}
+                                        onClick={() => this.toggleListAutoRefresh(!autoRefreshEnabled)}
+                                    >
+                                        自动刷新
+                                    </Button>
+                                </Tooltip>
+                                <Tooltip title="立即刷新直播间列表状态，不刷新网页">
+                                    <Button
+                                        icon={<ReloadOutlined />}
+                                        loading={isListRefreshing}
+                                        onClick={this.handleListRefreshClick}
+                                    >
+                                        刷新
+                                    </Button>
+                                </Tooltip>
                                 <Tooltip title={this.state.enableListSSE
                                     ? "实时更新已启用：列表变化将自动同步"
                                     : "实时更新已禁用：需手动刷新页面查看变化"}>

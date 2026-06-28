@@ -1522,6 +1522,9 @@ func applyConfigUpdates(c *configs.Config, updates map[string]interface{}) error
 				c.RPC.Auth.Password = password
 			}
 		}
+		if threshold, ok := rpc["sse_list_threshold"].(float64); ok {
+			c.RPC.SSEListThreshold = int(threshold)
+		}
 	}
 
 	// 处理基本配置
@@ -1654,6 +1657,15 @@ func applyConfigUpdates(c *configs.Config, updates map[string]interface{}) error
 		if recordingQuality, ok := feature["recording_quality"].(string); ok {
 			c.Feature.RecordingQuality = recordingQuality
 		}
+		if enableFlvProxySegment, ok := feature["enable_flv_proxy_segment"].(bool); ok {
+			c.Feature.EnableFlvProxySegment = enableFlvProxySegment
+		}
+		if hlsKeystream, ok := feature["hls_keystream"].(string); ok {
+			c.Feature.HlsKeystream = hlsKeystream
+		}
+		if hlsPkey, ok := feature["hls_pkey"].(string); ok {
+			c.Feature.HlsPkey = hlsPkey
+		}
 	}
 
 	// 处理视频分割策略
@@ -1671,6 +1683,9 @@ func applyConfigUpdates(c *configs.Config, updates map[string]interface{}) error
 				c.VideoSplitStrategies.MaxFileSize = parsed
 			}
 		}
+		if maxRecordDuration, ok := vss["max_record_duration"].(float64); ok {
+			c.VideoSplitStrategies.MaxRecordDuration = time.Duration(maxRecordDuration)
+		}
 	}
 
 	// 处理录制完成后动作
@@ -1686,6 +1701,9 @@ func applyConfigUpdates(c *configs.Config, updates map[string]interface{}) error
 		}
 		if fixFlv, ok := orf["fix_flv_at_first"].(bool); ok {
 			c.OnRecordFinished.FixFlvAtFirst = fixFlv
+		}
+		if saveCover, ok := orf["save_cover"].(bool); ok {
+			c.OnRecordFinished.SaveCover = saveCover
 		}
 		if burnSubtitles, ok := orf["burn_subtitles"].(bool); ok {
 			c.OnRecordFinished.BurnSubtitles = burnSubtitles
@@ -1704,6 +1722,32 @@ func applyConfigUpdates(c *configs.Config, updates map[string]interface{}) error
 		}
 		if deleteSource, ok := orf["burn_delete_source"].(bool); ok {
 			c.OnRecordFinished.BurnDeleteSource = deleteSource
+		}
+		if uploadTiming, ok := orf["upload_timing"].(string); ok {
+			c.OnRecordFinished.UploadTiming = configs.UploadTiming(uploadTiming)
+		}
+		if cloudUpload, ok := orf["cloud_upload"].(map[string]interface{}); ok {
+			if enable, ok := cloudUpload["enable"].(bool); ok {
+				c.OnRecordFinished.CloudUpload.Enable = enable
+			}
+			if storageName, ok := cloudUpload["storage_name"].(string); ok {
+				c.OnRecordFinished.CloudUpload.StorageName = storageName
+			}
+			if uploadPathTmpl, ok := cloudUpload["upload_path_tmpl"].(string); ok {
+				c.OnRecordFinished.CloudUpload.UploadPathTmpl = uploadPathTmpl
+			}
+			if deleteAfterUpload, ok := cloudUpload["delete_after_upload"].(bool); ok {
+				c.OnRecordFinished.CloudUpload.DeleteAfterUpload = deleteAfterUpload
+			}
+			if additionalStorages, ok := cloudUpload["additional_storages"].([]interface{}); ok {
+				storages := make([]string, 0, len(additionalStorages))
+				for _, storage := range additionalStorages {
+					if storageName, ok := storage.(string); ok && strings.TrimSpace(storageName) != "" {
+						storages = append(storages, storageName)
+					}
+				}
+				c.OnRecordFinished.CloudUpload.AdditionalStorages = storages
+			}
 		}
 	}
 
@@ -1786,6 +1830,20 @@ func applyConfigUpdates(c *configs.Config, updates map[string]interface{}) error
 				c.Notify.WxPusher.UIDs = uidList
 			}
 		}
+		if ntfyCfg, ok := notify["ntfy"].(map[string]interface{}); ok {
+			if enable, ok := ntfyCfg["enable"].(bool); ok {
+				c.Notify.Ntfy.Enable = enable
+			}
+			if url, ok := ntfyCfg["URL"].(string); ok {
+				c.Notify.Ntfy.URL = url
+			}
+			if token, ok := ntfyCfg["token"].(string); ok {
+				c.Notify.Ntfy.Token = token
+			}
+			if tag, ok := ntfyCfg["tag"].(string); ok {
+				c.Notify.Ntfy.Tag = tag
+			}
+		}
 	}
 
 	// 处理代理配置
@@ -1795,6 +1853,28 @@ func applyConfigUpdates(c *configs.Config, updates map[string]interface{}) error
 		}
 		if url, ok := proxy["url"].(string); ok {
 			c.Proxy.URL = url
+		}
+		if infoProxy, ok := proxy["info_proxy"].(map[string]interface{}); ok {
+			if c.Proxy.InfoProxy == nil {
+				c.Proxy.InfoProxy = &configs.ProxyEntry{}
+			}
+			if enable, ok := infoProxy["enable"].(bool); ok {
+				c.Proxy.InfoProxy.Enable = enable
+			}
+			if url, ok := infoProxy["url"].(string); ok {
+				c.Proxy.InfoProxy.URL = url
+			}
+		}
+		if downloadProxy, ok := proxy["download_proxy"].(map[string]interface{}); ok {
+			if c.Proxy.DownloadProxy == nil {
+				c.Proxy.DownloadProxy = &configs.ProxyEntry{}
+			}
+			if enable, ok := downloadProxy["enable"].(bool); ok {
+				c.Proxy.DownloadProxy.Enable = enable
+			}
+			if url, ok := downloadProxy["url"].(string); ok {
+				c.Proxy.DownloadProxy.URL = url
+			}
 		}
 	}
 
@@ -1842,6 +1922,29 @@ func applyConfigUpdates(c *configs.Config, updates map[string]interface{}) error
 		}
 		if includePrerelease, ok := update["include_prerelease"].(bool); ok {
 			c.Update.IncludePrerelease = includePrerelease
+		}
+	}
+
+	// 处理任务队列配置
+	if taskQueue, ok := updates["task_queue"].(map[string]interface{}); ok {
+		if maxConcurrent, ok := taskQueue["max_concurrent"].(float64); ok {
+			c.TaskQueue.MaxConcurrent = int(maxConcurrent)
+		}
+	}
+
+	// 处理 OpenList 配置
+	if openList, ok := updates["openlist"].(map[string]interface{}); ok {
+		if port, ok := openList["port"].(float64); ok {
+			c.OpenList.Port = int(port)
+		}
+		if dataPath, ok := openList["data_path"].(string); ok {
+			c.OpenList.DataPath = dataPath
+		}
+		if externalURL, ok := openList["external_url"].(string); ok {
+			c.OpenList.ExternalURL = externalURL
+		}
+		if externalToken, ok := openList["external_token"].(string); ok {
+			c.OpenList.ExternalToken = externalToken
 		}
 	}
 
@@ -2122,6 +2225,12 @@ func applyOverridableConfigUpdates(oc *configs.OverridableConfig, updates map[st
 		}
 		if recordingQuality, ok := feature["recording_quality"].(string); ok {
 			oc.Feature.RecordingQuality = recordingQuality
+		}
+		if hlsKeystream, ok := feature["hls_keystream"].(string); ok {
+			oc.Feature.HlsKeystream = hlsKeystream
+		}
+		if hlsPkey, ok := feature["hls_pkey"].(string); ok {
+			oc.Feature.HlsPkey = hlsPkey
 		}
 	}
 

@@ -3,6 +3,8 @@
   padding: 8px 12px;
   max-width: 100%;
   box-sizing: border-box;
+  background: var(--bgo-panel-bg);
+  color: var(--bgo-text);
 }
 
 .log-toolbar {
@@ -13,7 +15,8 @@
   align-items: center;
   gap: 4px;
   z-index: 10;
-  background: rgba(255, 255, 255, 0.85);
+  background: color-mix(in srgb, var(--bgo-elevated-bg) 84%, transparent);
+  border: 1px solid color-mix(in srgb, var(--bgo-border) 72%, transparent);
   padding: 4px 8px;
   border-radius: 4px;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
@@ -43,18 +46,18 @@
   height: 28px;
   border-radius: 4px;
   cursor: pointer;
-  color: #666;
+  color: var(--bgo-muted);
   transition: all 0.2s ease;
 }
 
 .log-toolbar-btn:hover {
-  background: #f0f0f0;
-  color: #1890ff;
+  background: var(--bgo-header-hover);
+  color: var(--bgo-accent);
 }
 
 .log-toolbar-btn.active {
-  color: #1890ff;
-  background: #e6f7ff;
+  color: var(--bgo-accent);
+  background: var(--bgo-accent-soft);
 }
 
 .log-toolbar-btn.paused {
@@ -64,17 +67,17 @@
 
 .log-toolbar-btn.paused:hover {
   color: #52c41a;
-  background: #f6ffed;
+  background: color-mix(in srgb, #52c41a 18%, var(--bgo-elevated-bg));
 }
 
 .log-toolbar-btn.disabled {
-  color: #ccc;
+  color: color-mix(in srgb, var(--bgo-muted) 56%, transparent);
   cursor: not-allowed;
 }
 
 .log-toolbar-btn.disabled:hover {
   background: transparent;
-  color: #ccc;
+  color: color-mix(in srgb, var(--bgo-muted) 56%, transparent);
 }
 
 .log-paused-hint {
@@ -101,7 +104,8 @@
   height: 240px;
   overflow-y: auto;
   overflow-x: hidden;
-  background: #fafafa;
+  background: var(--bgo-panel-bg);
+  border: 1px solid var(--bgo-border);
   border-radius: 4px;
   width: 0;
   min-width: 100%;
@@ -123,8 +127,8 @@
   font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
   font-size: 12px;
   line-height: 20px;
-  color: #333;
-  background: #f5f5f5;
+  color: var(--bgo-text);
+  background: var(--bgo-elevated-bg);
   padding: 2px 6px;
   border-radius: 3px;
   flex: 1;
@@ -138,7 +142,7 @@
   white-space: normal;
   word-break: break-all;
   overflow: visible;
-  background: #e6f7ff;
+  background: color-mix(in srgb, var(--bgo-accent-soft) 46%, var(--bgo-elevated-bg));
   position: relative;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
 }
@@ -148,7 +152,7 @@
   align-items: center;
   justify-content: center;
   height: 100%;
-  color: #999;
+  color: var(--bgo-muted);
   font-size: 14px;
 }
 
@@ -158,9 +162,9 @@
   gap: 8px;
   margin-top: 8px;
   padding-top: 8px;
-  border-top: 1px solid #f0f0f0;
+  border-top: 1px solid var(--bgo-border);
   font-size: 12px;
-  color: #999;
+  color: var(--bgo-muted);
 }
 
 .log-limit-hint {
@@ -178,17 +182,17 @@
 }
 
 .log-list-container::-webkit-scrollbar-track {
-  background: #f1f1f1;
+  background: var(--bgo-elevated-bg);
   border-radius: 3px;
 }
 
 .log-list-container::-webkit-scrollbar-thumb {
-  background: #ccc;
+  background: color-mix(in srgb, var(--bgo-muted) 42%, transparent);
   border-radius: 3px;
 }
 
 .log-list-container::-webkit-scrollbar-thumb:hover {
-  background: #999;
+  background: color-mix(in srgb, var(--bgo-muted) 70%, transparent);
 }
 
 /* 搜索框样式 */
@@ -198,7 +202,7 @@
   gap: 4px;
   margin-left: 8px;
   padding-left: 8px;
-  border-left: 1px solid #e8e8e8;
+  border-left: 1px solid var(--bgo-border);
 }
 
 .log-search-box .ant-input {
@@ -207,7 +211,7 @@
 
 .log-search-count {
   font-size: 12px;
-  color: #666;
+  color: var(--bgo-muted);
   min-width: 40px;
   text-align: center;
   transition: all 0.3s ease;
@@ -219,17 +223,17 @@
 
 @keyframes countChange {
   0% {
-    color: #666;
+    color: var(--bgo-muted);
     text-shadow: none;
   }
 
   30% {
-    color: #1890ff;
+    color: var(--bgo-accent);
     text-shadow: 0 0 8px rgba(24, 144, 255, 0.6);
   }
 
   100% {
-    color: #666;
+    color: var(--bgo-muted);
     text-shadow: none;
   }
 }
@@ -241,12 +245,22 @@
 
 /* 搜索高亮样式 */
 .log-highlight {
-  background-color: #ffffb8;
+  background-color: color-mix(in srgb, #ffffb8 82%, var(--bgo-panel-bg));
+  color: #24292f;
   padding: 0 1px;
   border-radius: 2px;
 }
 
 .log-highlight-current {
   background-color: #ffc53d;
+  color: #24292f;
   box-shadow: 0 0 4px rgba(255, 197, 61, 0.8);
+}
+
+html[data-bgo-theme='dark'] .log-toolbar {
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.24);
+}
+
+html[data-bgo-theme='dark'] .log-toolbar-btn.paused {
+  background: color-mix(in srgb, #ff4d4f 20%, var(--bgo-elevated-bg));
 }

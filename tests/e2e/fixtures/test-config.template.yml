@@ -43,7 +43,7 @@ on_record_finished:
   cloud_upload:
     enable: false
     storage_name: ""
-    upload_path_tmpl: /录播归档/{{ .Platform }}/{{ .HostName }}/{{ .RoomName }}-{{ now | date "2006-01-02" }}.{{ .Ext }}
+    upload_path_tmpl: /录播归档/{{ .Platform }}/{{ .HostName }}/{{ .RoomName }}/{{ .FileName }}
     delete_after_upload: false
   upload_timing: after_process
 timeout_in_us: 60000000
@@ -101,6 +101,8 @@ proxy:
 openlist:
   port: 5244
   data_path: ""
+  external_url: ""
+  external_token: ""
 update:
   auto_check: false
   check_interval_hours: 6
