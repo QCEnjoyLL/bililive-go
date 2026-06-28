@@ -140,6 +140,7 @@ jobs:
         with:
           body_path: ${{ env.RELEASE_NOTES_FILE }}
           files: |
+            config.yml
             dist/**/*.tar.gz
             dist/**/*.zip
             dist/**/*.7z
