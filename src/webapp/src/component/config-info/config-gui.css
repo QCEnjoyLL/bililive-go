@@ -6,6 +6,7 @@
   background: var(--bgo-page-bg);
   min-height: 100%;
   color: var(--bgo-text);
+  padding-bottom: 96px;
 }
 
 /* 设置页面头部 */
@@ -43,6 +44,48 @@
   margin: 16px;
   border-radius: 4px;
   color: var(--bgo-text);
+}
+
+.config-floating-actions {
+  position: fixed;
+  left: 50%;
+  bottom: 24px;
+  z-index: 120;
+  transform: translateX(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-width: 172px;
+  padding: 10px 14px;
+  border: 1px solid color-mix(in srgb, var(--bgo-border) 72%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bgo-elevated-bg) 82%, transparent);
+  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.20), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(18px) saturate(1.35);
+  -webkit-backdrop-filter: blur(18px) saturate(1.35);
+}
+
+.config-floating-actions .ant-btn {
+  min-width: 132px;
+}
+
+@media(max-device-width: 768px) {
+  .config-gui-container {
+    padding-bottom: 108px;
+  }
+
+  .config-floating-actions {
+    left: 50%;
+    right: auto;
+    bottom: 18px;
+    width: calc(100vw - 36px);
+    max-width: 360px;
+  }
+
+  .config-floating-actions .ant-btn {
+    width: 100%;
+  }
 }
 
 /* 设置分组 */

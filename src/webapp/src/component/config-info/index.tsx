@@ -33,6 +33,66 @@ const { TextArea } = Input;
 const ENABLE_PROXY_CONFIG = true;
 const { Panel } = Collapse;
 
+type ConfigScrollSnapshot = {
+  windowTop: number;
+  windowLeft: number;
+  targets: Array<{ key: string; top: number; left: number }>;
+};
+
+const getConfigScrollTargets = () => {
+  const candidates: Array<{ key: string; element: HTMLElement | null }> = [
+    { key: 'app-content', element: document.querySelector('.app-content') as HTMLElement | null },
+    { key: 'scrolling-element', element: document.scrollingElement as HTMLElement | null },
+    { key: 'document-element', element: document.documentElement },
+    { key: 'body', element: document.body },
+  ];
+  const seen = new Set<HTMLElement>();
+  return candidates.filter(({ element }) => {
+    if (!element || seen.has(element)) {
+      return false;
+    }
+    seen.add(element);
+    return true;
+  }) as Array<{ key: string; element: HTMLElement }>;
+};
+
+const captureConfigScroll = (): ConfigScrollSnapshot => ({
+  windowTop: window.scrollY || 0,
+  windowLeft: window.scrollX || 0,
+  targets: getConfigScrollTargets().map(({ key, element }) => ({
+    key,
+    top: element.scrollTop,
+    left: element.scrollLeft,
+  })),
+});
+
+const restoreConfigScroll = (position: ConfigScrollSnapshot) => {
+  const apply = () => {
+    window.scrollTo(position.windowLeft, position.windowTop);
+    const targets = getConfigScrollTargets();
+    position.targets.forEach((savedTarget) => {
+      const current = targets.find(({ key }) => key === savedTarget.key);
+      if (!current) {
+        return;
+      }
+      current.element.scrollTo(savedTarget.left, savedTarget.top);
+      current.element.scrollTop = savedTarget.top;
+      current.element.scrollLeft = savedTarget.left;
+    });
+  };
+
+  apply();
+  requestAnimationFrame(() => {
+    apply();
+    requestAnimationFrame(apply);
+  });
+  [50, 150, 300].forEach(delay => window.setTimeout(apply, delay));
+};
+
+type LoadConfigOptions = {
+  silent?: boolean;
+};
+
 // 配置项类型定义
 // 下载器可用性信息
 interface DownloaderAvailability {
@@ -1006,7 +1066,7 @@ const GlobalSettings: React.FC<{
           </ConfigField>
         </Card>
 
-        <div className="config-actions">
+        <div className="config-actions config-floating-actions">
           <Button
             type="primary"
             icon={<SaveOutlined />}
@@ -1210,7 +1270,7 @@ const NotifySettings: React.FC<{
           </ConfigField>
         </Card>
 
-        <div className="config-actions">
+        <div className="config-actions config-floating-actions">
           <Button
             type="primary"
             icon={<SaveOutlined />}
@@ -2282,8 +2342,10 @@ const ConfigInfo: React.FC = () => {
   const [activeTab, setActiveTab] = useState('global');
 
   // 加载配置
-  const loadConfig = useCallback(async () => {
-    setLoading(true);
+  const loadConfig = useCallback(async (options: LoadConfigOptions = {}) => {
+    if (!options.silent) {
+      setLoading(true);
+    }
     try {
       const [effective, platforms, raw] = await Promise.all([
         api.getEffectiveConfig(),
@@ -2296,9 +2358,16 @@ const ConfigInfo: React.FC = () => {
     } catch (error) {
       message.error('加载配置失败');
     } finally {
-      setLoading(false);
+      if (!options.silent) {
+        setLoading(false);
+      }
     }
   }, []);
+
+  const refreshConfig = useCallback(() => {
+    const scrollPosition = captureConfigScroll();
+    loadConfig().finally(() => restoreConfigScroll(scrollPosition));
+  }, [loadConfig]);
 
   useEffect(() => {
     loadConfig();
@@ -2360,10 +2429,12 @@ const ConfigInfo: React.FC = () => {
 
   // 更新全局配置
   const handleUpdateConfig = async (updates: any) => {
+    const scrollPosition = captureConfigScroll();
     setSaving(true);
     try {
       await api.updateConfig(updates);
-      await loadConfig();
+      await loadConfig({ silent: true });
+      restoreConfigScroll(scrollPosition);
     } finally {
       setSaving(false);
     }
@@ -2371,10 +2442,12 @@ const ConfigInfo: React.FC = () => {
 
   // 更新平台配置
   const handleUpdatePlatformConfig = async (platformKey: string, updates: any) => {
+    const scrollPosition = captureConfigScroll();
     setSaving(true);
     try {
       await api.updatePlatformConfig(platformKey, updates);
-      await loadConfig();
+      await loadConfig({ silent: true });
+      restoreConfigScroll(scrollPosition);
     } finally {
       setSaving(false);
     }
@@ -2382,10 +2455,12 @@ const ConfigInfo: React.FC = () => {
 
   // 更新直播间配置
   const handleUpdateRoomConfig = async (liveId: string, updates: any) => {
+    const scrollPosition = captureConfigScroll();
     setSaving(true);
     try {
       await api.updateRoomConfigById(liveId, updates);
-      await loadConfig();
+      await loadConfig({ silent: true });
+      restoreConfigScroll(scrollPosition);
     } finally {
       setSaving(false);
     }
@@ -2393,10 +2468,12 @@ const ConfigInfo: React.FC = () => {
 
   // 删除平台配置
   const handleDeletePlatformConfig = async (platformKey: string) => {
+    const scrollPosition = captureConfigScroll();
     setSaving(true);
     try {
       await api.deletePlatformConfig(platformKey);
-      await loadConfig();
+      await loadConfig({ silent: true });
+      restoreConfigScroll(scrollPosition);
     } finally {
       setSaving(false);
     }
@@ -2404,11 +2481,13 @@ const ConfigInfo: React.FC = () => {
 
   // 保存 YAML 配置
   const handleSaveYaml = async () => {
+    const scrollPosition = captureConfigScroll();
     setSaving(true);
     try {
       await api.saveRawConfig({ config: rawConfig });
       message.success('配置已保存');
-      await loadConfig();
+      await loadConfig({ silent: true });
+      restoreConfigScroll(scrollPosition);
     } catch (error) {
       message.error('保存失败');
     } finally {
@@ -2458,7 +2537,7 @@ const ConfigInfo: React.FC = () => {
               onUpdate={handleUpdatePlatformConfig}
               onDelete={handleDeletePlatformConfig}
               loading={saving}
-              onRefresh={loadConfig}
+              onRefresh={refreshConfig}
             />
           ) : <Spin />
         },
@@ -2480,7 +2559,7 @@ const ConfigInfo: React.FC = () => {
               globalConfig={effectiveConfig}
               onUpdate={handleUpdateRoomConfig}
               loading={saving}
-              onRefresh={loadConfig}
+              onRefresh={refreshConfig}
             />
           ) : <Spin />
         },
@@ -2519,7 +2598,7 @@ const ConfigInfo: React.FC = () => {
           minHeight: 400
         }}
       />
-      <div className="config-actions">
+      <div className="config-actions config-floating-actions">
         <Button
           type="primary"
           icon={<SaveOutlined />}
@@ -2543,7 +2622,7 @@ const ConfigInfo: React.FC = () => {
         <Space>
           <Button
             icon={<ReloadOutlined />}
-            onClick={loadConfig}
+            onClick={refreshConfig}
             loading={loading}
           >
             刷新
@@ -2566,7 +2645,7 @@ const ConfigInfo: React.FC = () => {
                 <SettingOutlined /> GUI 模式
               </span>
             ),
-            children: loading ? (
+            children: loading && !effectiveConfig ? (
               <div className="config-loading">
                 <Spin size="large" />
               </div>
@@ -2579,7 +2658,7 @@ const ConfigInfo: React.FC = () => {
                 <EditOutlined /> YAML 模式
               </span>
             ),
-            children: loading ? (
+            children: loading && !effectiveConfig ? (
               <div className="config-loading">
                 <Spin size="large" />
               </div>

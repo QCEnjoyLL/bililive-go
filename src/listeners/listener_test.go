@@ -70,10 +70,15 @@ func TestRefresh(t *testing.T) {
 	ed.EXPECT().DispatchEvent(events.NewEvent(RoomNameChanged, live))
 	l.refresh()
 
-	// true -> false
+	// true -> false, first offline poll is debounced
 	live.EXPECT().GetInfo().Return(&livepkg.Info{Status: false}, nil)
 	live.EXPECT().GetRawUrl().Return("").AnyTimes() // 添加对GetRawUrl方法的期望调用
 	live.EXPECT().GetPlatformCNName().Return("platform").AnyTimes()
+	l.refresh()
+	assert.True(t, l.status.roomStatus)
+
+	// true -> false, second consecutive offline poll confirms LiveEnd
+	live.EXPECT().GetInfo().Return(&livepkg.Info{Status: false}, nil)
 	ed.EXPECT().DispatchEvent(events.NewEvent(LiveEnd, live))
 	l.refresh()
 	assert.False(t, l.status.roomStatus)
