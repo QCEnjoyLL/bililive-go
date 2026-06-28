@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -61,11 +63,33 @@ func TestWebAuthMiddleware(t *testing.T) {
 	assert.Equal(t, http.StatusUnauthorized, api.Code)
 	assert.Empty(t, api.Header().Get("WWW-Authenticate"))
 
+	favicon := httptest.NewRecorder()
+	faviconReq := httptest.NewRequest(http.MethodGet, "/favicon.ico", nil)
+	handler.ServeHTTP(favicon, faviconReq)
+	assert.Equal(t, http.StatusNoContent, favicon.Code)
+
 	authorized := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.SetBasicAuth("admin", "secret")
 	handler.ServeHTTP(authorized, req)
 	assert.Equal(t, http.StatusNoContent, authorized.Code)
+}
+
+func TestServeWebAppAssetUsesExplicitContentType(t *testing.T) {
+	dir := t.TempDir()
+	body := []byte{0x89, 0x50, 0x4e, 0x47}
+	err := os.WriteFile(filepath.Join(dir, "favicon.ico"), body, 0644)
+	assert.NoError(t, err)
+
+	handler := serveWebAppAsset(http.Dir(dir), "favicon.ico", "image/png")
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/favicon.ico", nil)
+
+	handler(recorder, req)
+
+	assert.Equal(t, http.StatusOK, recorder.Code)
+	assert.Equal(t, "image/png", recorder.Header().Get("Content-Type"))
+	assert.Equal(t, body, recorder.Body.Bytes())
 }
 
 func TestLoginWebUICreatesSessionCookie(t *testing.T) {

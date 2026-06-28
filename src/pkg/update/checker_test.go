@@ -50,11 +50,12 @@ func TestNormalizeChangelogUsesChineseFallback(t *testing.T) {
 }
 
 func TestChangelogForReleaseReadsRepositoryNotesWhenBodyEmpty(t *testing.T) {
+	const releaseNotes = "repository release notes from docs"
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1.1.11/docs/releases/v1.1.11.md" {
 			t.Fatalf("更新说明请求路径错误: %s", r.URL.Path)
 		}
-		_, _ = w.Write([]byte("## v1.1.11\n\n- 中文更新说明"))
+		_, _ = w.Write([]byte(releaseNotes))
 	}))
 	defer server.Close()
 
@@ -62,7 +63,7 @@ func TestChangelogForReleaseReadsRepositoryNotesWhenBodyEmpty(t *testing.T) {
 	c.SetRawBaseURL(server.URL)
 
 	got := c.changelogForRelease("", "v1.1.11")
-	if !strings.Contains(got, "中文更新说明") {
+	if !strings.Contains(got, releaseNotes) {
 		t.Fatalf("未读取仓库更新说明: %q", got)
 	}
 }

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Card,
   Button,
@@ -110,6 +110,7 @@ const UpdatePage: React.FC = () => {
   const [rollingBack, setRollingBack] = useState(false);
   const [restarting, setRestarting] = useState(false);
   const [restartCountdown, setRestartCountdown] = useState(0);
+  const restartPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // 加载初始数据
   const loadData = useCallback(async () => {
@@ -216,6 +217,9 @@ const UpdatePage: React.FC = () => {
 
     return () => {
       subIds.forEach(id => unsubscribeSSE(id));
+      if (restartPollRef.current) {
+        clearInterval(restartPollRef.current);
+      }
     };
   }, [loadData, handleSSEMessage]);
 
@@ -311,24 +315,48 @@ const UpdatePage: React.FC = () => {
 
   // 等待服务器重启后自动刷新页面
   const waitForServerRestart = () => {
+    if (restartPollRef.current) {
+      clearInterval(restartPollRef.current);
+      restartPollRef.current = null;
+    }
     setRestarting(true);
     setRestartCountdown(0);
     message.loading({ content: '正在重启服务器...', key: 'restart', duration: 0 });
 
+    const returnPath = `${window.location.pathname}${window.location.search}${window.location.hash}` || '/';
     let elapsed = 0;
-    const interval = setInterval(async () => {
+    restartPollRef.current = setInterval(async () => {
       elapsed += 2;
       setRestartCountdown(elapsed);
 
       try {
         // 尝试请求服务器，如果成功说明新版本已启动
-        const res = await fetch('/api/info', { signal: AbortSignal.timeout(2000) });
+        const res = await fetch('/api/info', {
+          cache: 'no-store',
+          credentials: 'same-origin',
+          redirect: 'manual',
+          signal: AbortSignal.timeout(2000)
+        });
         if (res.ok) {
-          clearInterval(interval);
+          if (restartPollRef.current) {
+            clearInterval(restartPollRef.current);
+            restartPollRef.current = null;
+          }
           message.success({ content: '服务器已重启，正在刷新页面...', key: 'restart', duration: 2 });
           setTimeout(() => {
             window.location.reload();
           }, 1000);
+          return;
+        } else if (res.status === 401 || res.status === 403) {
+          if (restartPollRef.current) {
+            clearInterval(restartPollRef.current);
+            restartPollRef.current = null;
+          }
+          message.success({ content: '服务器已重启，需要重新登录...', key: 'restart', duration: 2 });
+          setTimeout(() => {
+            window.location.assign(`/login?next=${encodeURIComponent(returnPath)}`);
+          }, 1000);
+          return;
         }
       } catch {
         // 服务器尚未就绪，继续等待
@@ -336,7 +364,10 @@ const UpdatePage: React.FC = () => {
 
       // 超过 60 秒仍未就绪，停止轮询
       if (elapsed >= 60) {
-        clearInterval(interval);
+        if (restartPollRef.current) {
+          clearInterval(restartPollRef.current);
+          restartPollRef.current = null;
+        }
         setRestarting(false);
         message.warning({ content: '服务器重启超时，请手动刷新页面', key: 'restart', duration: 5 });
       }
@@ -445,7 +476,7 @@ const UpdatePage: React.FC = () => {
           <Spin size="large" />
           <Title level={4} style={{ marginTop: 24 }}>正在重启服务器...</Title>
           <Text type="secondary">
-            已等待 {restartCountdown} 秒，服务器重启后页面将自动刷新
+            已等待 {restartCountdown} 秒，服务器重启后页面将自动刷新；如果登录会话失效，将自动前往登录页
           </Text>
         </div>
       </div>

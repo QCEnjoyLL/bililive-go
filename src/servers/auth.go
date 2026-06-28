@@ -114,7 +114,7 @@ func webAuthMiddleware(auth configs.RPCAuth) mux.MiddlewareFunc {
 
 func isWebAuthPublicPath(path string) bool {
 	switch path {
-	case "/login", "/api/auth/login", "/api/auth/logout":
+	case "/login", "/api/auth/login", "/api/auth/logout", "/favicon.ico", "/manifest.json":
 		return true
 	default:
 		return false

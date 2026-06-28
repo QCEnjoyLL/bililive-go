@@ -288,6 +288,7 @@ func initMux(ctx context.Context) *mux.Router {
 	if err != nil {
 		applog.GetLogger().Fatal(err)
 	}
+	m.HandleFunc("/favicon.ico", serveWebAppAsset(fs, "favicon.ico", "image/png")).Methods(http.MethodGet, http.MethodHead)
 	m.PathPrefix("/").Handler(http.FileServer(fs))
 
 	// pprof
@@ -299,6 +300,27 @@ func initMux(ctx context.Context) *mux.Router {
 		}).Methods("GET")
 	}
 	return m
+}
+
+func serveWebAppAsset(fs http.FileSystem, name string, contentType string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		file, err := fs.Open(name)
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		defer file.Close()
+
+		stat, err := file.Stat()
+		if err != nil || stat.IsDir() {
+			http.NotFound(w, r)
+			return
+		}
+
+		w.Header().Set("Content-Type", contentType)
+		w.Header().Set("Cache-Control", "public, max-age=3600")
+		http.ServeContent(w, r, name, stat.ModTime(), file)
+	}
 }
 
 func isPublicRPCBind(bind string) bool {
