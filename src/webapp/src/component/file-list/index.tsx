@@ -41,23 +41,28 @@ function parseAssColor(c: string): string {
     return `rgba(${r},${g},${b},${a.toFixed(2)})`;
 }
 
-type DanmakuEntry = { start: number; end: number; color: string; text: string; style: string; align: number; bgColor: string };
+type DanmakuEntry = { start: number; end: number; color: string; text: string; style: string; align: number; bgColor: string; marginV: number };
 
 /** 解析 ASS 文件，提取所有弹幕条目 */
-function parseAss(content: string): { items: DanmakuEntry[]; scrollTime: number } {
+function parseAss(content: string): { items: DanmakuEntry[]; scrollTime: number; resY: number } {
     const lines = content.split('\n');
     const items: DanmakuEntry[] = [];
     let inStyles = false;
     let inEvents = false;
     let resX = 1920;
+    let resY = 1080;
     let bannerSpeed = 80; // ms per pixel
     // 样式名 → PrimaryColour / BackColour CSS 颜色
     const styleColors: Record<string, string> = {};
     const styleBackColors: Record<string, string> = {};
+    // 样式名 → MarginV
+    const styleMarginV: Record<string, number> = {};
 
     for (const line of lines) {
         const mr = line.match(/^PlayResX:\s*(\d+)/);
         if (mr) resX = parseInt(mr[1]);
+        const my = line.match(/^PlayResY:\s*(\d+)/);
+        if (my) resY = parseInt(my[1]);
 
         // 解析样式定义中的颜色（忽略大小写）
         const trimmed = line.trim().toLowerCase();
@@ -66,12 +71,13 @@ function parseAss(content: string): { items: DanmakuEntry[]; scrollTime: number 
         if (line.startsWith('[')) { inStyles = false; inEvents = false; continue; }
 
         if (inStyles && line.startsWith('Style:')) {
-            // Style: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, ...
+            // Style: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
             const sp = line.substring('Style:'.length).split(',');
-            if (sp.length >= 7) {
+            if (sp.length >= 23) {
                 const name = sp[0].trim();
                 styleColors[name] = parseAssColor(sp[3].trim());
                 styleBackColors[name] = parseAssColor(sp[6].trim());
+                styleMarginV[name] = parseInt(sp[22].trim()) || 0;
             }
             continue;
         }
@@ -79,6 +85,7 @@ function parseAss(content: string): { items: DanmakuEntry[]; scrollTime: number 
         if (!inEvents) continue;
         if (!line.startsWith('Dialogue:')) continue;
 
+        // Dialogue: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         const parts = line.substring('Dialogue:'.length).split(',');
         if (parts.length < 10) continue;
 
@@ -93,6 +100,8 @@ function parseAss(content: string): { items: DanmakuEntry[]; scrollTime: number 
 
         const start = parseAssTime(parts[1]);
         const end = parseAssTime(parts[2]);
+        // MarginV: Dialogue 行的第 8 个字段（0-indexed: 7）
+        const marginV = parseInt(parts[7].trim()) || styleMarginV[style] || 0;
         const raw = parts.slice(9).join(',');
         // 优先使用 Dialogue 行中的 {\c} 覆盖色，否则回退到样式定义的 PrimaryColour
         let color = styleColors[style] || 'rgba(255,255,255,1)';
@@ -104,22 +113,20 @@ function parseAss(content: string): { items: DanmakuEntry[]; scrollTime: number 
         if (am) align = parseInt(am[1]);
         const text = raw.replace(/\{[^}]*\}/g, '');
         const bgColor = styleBackColors[style] || '';
-        if (end > start && text) items.push({ start, end, color, text, style, align, bgColor });
+        if (end > start && text) items.push({ start, end, color, text, style, align, bgColor, marginV });
     }
 
-    return { items, scrollTime: (bannerSpeed * resX) / 1000 };
+    return { items, scrollTime: (bannerSpeed * resX) / 1000, resY };
 }
 
 // ==================== 弹幕渲染器 ====================
 
 const DANMAKU_FONT_SIZE = 22;
-const DANMAKU_GAP = 50;      // 同轨道弹幕间隔（px）
 
 /**
- * 弹幕渲染器 — 核心：同轨道可同时显示多条弹幕
- * 使用 requestAnimationFrame 手动控制 left 位置，而非 CSS animation，
- * 这样可以精确跟踪每条弹幕的右边缘，实现真正的多弹幕同轨。
- * 同时支持固定位置的消息（Guard/SC/Toast）。
+ * 弹幕渲染器 — 直接使用 ASS 文件中的时间轴和位置信息
+ * ASS 已包含防重叠逻辑，Web 端无需重复计算
+ * 使用 requestAnimationFrame 手动控制 left 位置实现滚动动画
  */
 export interface DanmakuFilter {
     danmaku: boolean;
@@ -137,20 +144,22 @@ class DanmakuRenderer {
     private rafId = 0;
     private running = false;
     private nextIdx = 0;
-    // 滚动弹幕轨道
-    private lanes: Array<{ el: HTMLDivElement; spawnTime: number; rightEdgeOutTime: number; tailEnterTime: number }[]> = [];
-    private laneCount = 0;
+    // 滚动弹幕（按结束时间排序，用于清理）
+    private scrollEls: { el: HTMLDivElement; spawnTime: number; endTime: number }[] = [];
     // 固定位置消息（按位置分组堆叠）
     private fixedEls: { el: HTMLDivElement; endTime: number; fadeOutTime: number; posKey: string; fadingOut: boolean }[] = [];
     // 滚动样式白名单
     private static SCROLL_STYLES = new Set(['Danmaku', 'Gift']);
+    // ASS 原始分辨率（用于 marginV 缩放）
+    private resY = 1080;
 
-    constructor(overlay: HTMLDivElement, video: HTMLVideoElement, items: DanmakuEntry[], scrollTime: number, filter: DanmakuFilter) {
+    constructor(overlay: HTMLDivElement, video: HTMLVideoElement, items: DanmakuEntry[], scrollTime: number, filter: DanmakuFilter, resY: number) {
         this.overlay = overlay;
         this.video = video;
         this.items = items.slice().sort((a, b) => a.start - b.start);
         this.scrollTime = scrollTime;
         this.filter = filter;
+        this.resY = resY;
     }
 
     private matchesFilter(style: string): boolean {
@@ -169,8 +178,7 @@ class DanmakuRenderer {
         if (this.running) return;
         this.running = true;
         this.nextIdx = 0;
-        this.laneCount = Math.max(1, Math.floor(this.overlay.clientHeight / (DANMAKU_FONT_SIZE + 4)));
-        this.lanes = Array.from({ length: this.laneCount }, () => []);
+        this.scrollEls = [];
         this.rafId = requestAnimationFrame(this.tick);
     }
 
@@ -178,14 +186,12 @@ class DanmakuRenderer {
         this.running = false;
         if (this.rafId) cancelAnimationFrame(this.rafId);
         this.rafId = 0;
-        // 逐个移除固定消息（触发猴子补丁的定时器清理）
+        // 移除所有滚动弹幕
+        for (const d of this.scrollEls) d.el.remove();
+        this.scrollEls = [];
+        // 移除固定消息
         for (const f of this.fixedEls) f.el.remove();
         this.fixedEls = [];
-        // 逐个移除滚动弹幕
-        for (const lane of this.lanes) {
-            for (const d of lane) d.el.remove();
-        }
-        this.lanes = [];
         // 移除 overlay 元素本身
         if (this.overlay.parentNode) {
             this.overlay.parentNode.removeChild(this.overlay);
@@ -194,11 +200,9 @@ class DanmakuRenderer {
 
     /** 跳转到指定时间：清理已有弹幕，找到正确起始索引 */
     seek(time: number) {
-        // 清理 DOM 和轨道
-        for (const lane of this.lanes) {
-            for (const d of lane) d.el.remove();
-        }
-        this.lanes = Array.from({ length: this.laneCount }, () => []);
+        // 清理 DOM
+        for (const d of this.scrollEls) d.el.remove();
+        this.scrollEls = [];
         for (const f of this.fixedEls) f.el.remove();
         this.fixedEls = [];
 
@@ -225,12 +229,13 @@ class DanmakuRenderer {
 
         const t = this.video.currentTime;
         const cw = this.overlay.clientWidth || 1;
+        const ch = this.overlay.clientHeight || 1;
 
-        // 1. 清理已完全滚出的弹幕
-        for (const lane of this.lanes) {
-            while (lane.length > 0 && lane[0].rightEdgeOutTime <= t) {
-                lane[0].el.remove();
-                lane.shift();
+        // 1. 清理已结束的滚动弹幕
+        for (let i = this.scrollEls.length - 1; i >= 0; i--) {
+            if (this.scrollEls[i].endTime <= t) {
+                this.scrollEls[i].el.remove();
+                this.scrollEls.splice(i, 1);
             }
         }
 
@@ -258,7 +263,7 @@ class DanmakuRenderer {
                 continue;
             }
             if (DanmakuRenderer.SCROLL_STYLES.has(item.style)) {
-                this.spawnScroll(item, t, cw);
+                this.spawnScroll(item, t, cw, ch);
             } else {
                 this.spawnFixed(item, t);
             }
@@ -266,15 +271,13 @@ class DanmakuRenderer {
         }
 
         // 4. 更新所有滚动弹幕位置
-        for (const lane of this.lanes) {
-            for (const d of lane) {
-                const elapsed = t - d.spawnTime;
-                const progress = elapsed / this.scrollTime;
-                const el = d.el;
-                const twPct = parseFloat(el.dataset.tw || '20');
-                const leftPct = 100 - progress * (100 + twPct);
-                el.style.left = leftPct + '%';
-            }
+        for (const d of this.scrollEls) {
+            const elapsed = t - d.spawnTime;
+            const progress = elapsed / this.scrollTime;
+            const el = d.el;
+            const twPct = parseFloat(el.dataset.tw || '20');
+            const leftPct = 100 - progress * (100 + twPct);
+            el.style.left = leftPct + '%';
         }
     };
 
@@ -297,33 +300,12 @@ class DanmakuRenderer {
         return px;
     }
 
-    private spawnScroll(item: DanmakuEntry, t: number, cw: number) {
+    private spawnScroll(item: DanmakuEntry, t: number, cw: number, ch: number) {
         const textPx = this.estimateTextWidth(item.text);
         const twPct = (textPx / cw) * 100;
 
-        // 尾部进入屏幕的时间
-        const textEnterTime = t + (textPx / cw) * this.scrollTime;
-        // 完全滚出时间 = 滚动时间 + 文字滚入时间
-        const rightEdgeOutTime = t + this.scrollTime + (textPx / cw) * this.scrollTime;
-        // 安全间隔时间
-        const safeGapTime = (DANMAKU_GAP / cw) * this.scrollTime;
-
-        // 寻找可容纳的轨道
-        let laneIdx = -1;
-        for (let i = 0; i < this.laneCount; i++) {
-            const lane = this.lanes[i];
-            if (lane.length === 0) { laneIdx = i; break; }
-            const last = lane[lane.length - 1];
-            // 条件：最后一条弹幕的尾部已进入屏幕 + 安全间隔
-            if (t >= last.tailEnterTime + safeGapTime) { laneIdx = i; break; }
-        }
-        if (laneIdx < 0) {
-            let minLen = Infinity;
-            for (let i = 0; i < this.laneCount; i++) {
-                if (this.lanes[i].length < minLen) { minLen = this.lanes[i].length; laneIdx = i; }
-            }
-        }
-        if (laneIdx < 0) return;
+        // 计算结束时间（从 ASS 的 start + scrollTime）
+        const endTime = item.start + this.scrollTime + (textPx / cw) * this.scrollTime;
 
         // 创建 DOM
         const el = document.createElement('div');
@@ -333,12 +315,15 @@ class DanmakuRenderer {
         el.style.fontSize = DANMAKU_FONT_SIZE + 'px';
         el.style.lineHeight = (DANMAKU_FONT_SIZE + 4) + 'px';
         el.style.textShadow = '1px 1px 2px rgba(0,0,0,0.8),-1px -1px 2px rgba(0,0,0,0.8),1px -1px 2px rgba(0,0,0,0.8),-1px 1px 2px rgba(0,0,0,0.8)';
-        el.style.top = (laneIdx * (DANMAKU_FONT_SIZE + 4)) + 'px';
+
+        // 直接使用 ASS 的 marginV，按比例缩放到 overlay 高度
+        const scaledTop = (item.marginV / this.resY) * ch;
+        el.style.top = scaledTop + 'px';
         el.style.left = '100%';
         el.dataset.tw = twPct.toString();
 
         this.overlay.appendChild(el);
-        this.lanes[laneIdx].push({ el, spawnTime: t, rightEdgeOutTime, tailEnterTime: textEnterTime });
+        this.scrollEls.push({ el, spawnTime: t, endTime });
     }
 
     /** 重新布局固定位置消息，消除过期后留下的空隙 */
@@ -458,7 +443,7 @@ const FileList: React.FC = () => {
     const [filterGift, setFilterGift] = useState(true);
     const [filterGuard, setFilterGuard] = useState(true);
     const [filterSC, setFilterSC] = useState(true);
-    const parsedItemsRef = useRef<{ items: DanmakuEntry[]; scrollTime: number } | null>(null);
+    const parsedItemsRef = useRef<{ items: DanmakuEntry[]; scrollTime: number; resY: number } | null>(null);
     const currentPlayingRef = useRef<{ record: CurrentFolderFile; fullPath: string } | null>(null);
 
     // 重命名相关状态
@@ -601,9 +586,9 @@ const FileList: React.FC = () => {
         fetch(assUrl)
             .then(r => r.ok ? r.text() : Promise.reject())
             .then(text => {
-                const { items, scrollTime } = parseAss(text);
+                const { items, scrollTime, resY } = parseAss(text);
                 if (items.length === 0) return;
-                parsedItemsRef.current = { items, scrollTime };
+                parsedItemsRef.current = { items, scrollTime, resY };
 
                 // 统计弹幕类型
                 let danmakuCount = 0, giftCount = 0, giftAmount = 0, guardCount = 0, guardAmount = 0, scCount = 0, scAmount = 0;
@@ -635,7 +620,7 @@ const FileList: React.FC = () => {
                 overlay.className = 'danmaku-overlay';
                 artInner.appendChild(overlay);
 
-                const renderer = new DanmakuRenderer(overlay, artRef.current!.video, items, scrollTime, { danmaku: filterDanmaku, gift: filterGift, guard: filterGuard, sc: filterSC });
+                const renderer = new DanmakuRenderer(overlay, artRef.current!.video, items, scrollTime, { danmaku: filterDanmaku, gift: filterGift, guard: filterGuard, sc: filterSC }, resY);
                 danmakuRef.current = renderer;
                 renderer.start();
                 if (artRef.current!.video.currentTime > 0) {
@@ -658,8 +643,8 @@ const FileList: React.FC = () => {
         overlay.className = 'danmaku-overlay';
         artInner.appendChild(overlay);
 
-        const { items, scrollTime } = parsedItemsRef.current;
-        const renderer = new DanmakuRenderer(overlay, artRef.current.video, items, scrollTime, { danmaku: filterDanmaku, gift: filterGift, guard: filterGuard, sc: filterSC });
+        const { items, scrollTime, resY } = parsedItemsRef.current;
+        const renderer = new DanmakuRenderer(overlay, artRef.current.video, items, scrollTime, { danmaku: filterDanmaku, gift: filterGift, guard: filterGuard, sc: filterSC }, resY);
         danmakuRef.current = renderer;
         renderer.start();
         if (currentTime > 0) renderer.seek(currentTime);
@@ -974,9 +959,9 @@ const FileList: React.FC = () => {
                         fetch(assUrl)
                             .then(r => r.ok ? r.text() : Promise.reject())
                             .then(text => {
-                                const { items, scrollTime } = parseAss(text);
+                                const { items, scrollTime, resY } = parseAss(text);
                                 if (items.length === 0) return;
-                                parsedItemsRef.current = { items, scrollTime };
+                                parsedItemsRef.current = { items, scrollTime, resY };
                                 let danmakuCount = 0, giftCount = 0, giftAmount = 0, guardCount = 0, guardAmount = 0, scCount = 0, scAmount = 0;
                                 for (const item of items) {
                                     if (item.style === 'Danmaku') danmakuCount++;
@@ -1010,7 +995,7 @@ const FileList: React.FC = () => {
                                 overlay.className = 'danmaku-overlay';
                                 artInner.appendChild(overlay);
 
-                                const renderer = new DanmakuRenderer(overlay, art.video, items, scrollTime, { danmaku: filterDanmaku, gift: filterGift, guard: filterGuard, sc: filterSC });
+                                const renderer = new DanmakuRenderer(overlay, art.video, items, scrollTime, { danmaku: filterDanmaku, gift: filterGift, guard: filterGuard, sc: filterSC }, resY);
                                 danmakuRef.current = renderer;
                                 renderer.start();
                                 // 如果浏览器恢复了播放位置，跳转到当前时间
