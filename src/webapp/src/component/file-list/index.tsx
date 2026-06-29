@@ -178,8 +178,9 @@ class DanmakuRenderer {
         this.items = items.slice().sort((a, b) => a.start - b.start);
         this.scrollTime = scrollTime;
         this.filter = filter;
-        this.resY = resY;
+        this.resY = resY > 0 ? resY : 1080;
         this.settings = settings;
+        this.overlay.style.opacity = String(settings.opacity);
     }
 
     /** 判断弹幕是否在指定区域内 */
@@ -245,13 +246,26 @@ class DanmakuRenderer {
             if (this.items[mid].start <= time) lo = mid + 1;
             else hi = mid;
         }
-        // 向前扫描：仅包含仍在显示期的固定消息（SC/上舰）
-        // 滚动弹幕不重新发射（它们无法从中间位置开始）
-        let idx = lo;
-        while (idx > 0 && this.items[idx - 1].end > time && !DanmakuRenderer.SCROLL_STYLES.has(this.items[idx - 1].style)) {
-            idx--;
+        this.nextIdx = lo;
+
+        // 向前寻找仍在显示期的固定消息并直接渲染
+        for (let i = lo - 1; i >= 0; i--) {
+            const item = this.items[i];
+            if (time - item.start > 10) break; // 超过 10 秒的消息肯定已结束
+            if (item.end > time && !DanmakuRenderer.SCROLL_STYLES.has(item.style)) {
+                if (this.matchesFilter(item.style)) {
+                    this.spawnFixed(item, time);
+                }
+            }
         }
-        this.nextIdx = idx;
+    }
+
+    /** 动态更新设置，无需销毁重建 */
+    update(filter: DanmakuFilter, settings: DanmakuSettings) {
+        this.filter = filter;
+        this.settings = settings;
+        // 透明度直接应用到 overlay
+        this.overlay.style.opacity = String(settings.opacity);
     }
 
     private tick = () => {
@@ -353,7 +367,6 @@ class DanmakuRenderer {
         el.style.color = item.color;
         el.style.fontSize = fontSize + 'px';
         el.style.lineHeight = (fontSize + 4) + 'px';
-        el.style.opacity = String(this.settings.opacity);
         el.style.textShadow = '1px 1px 2px rgba(0,0,0,0.8),-1px -1px 2px rgba(0,0,0,0.8),1px -1px 2px rgba(0,0,0,0.8),-1px 1px 2px rgba(0,0,0,0.8)';
 
         // 直接使用 ASS 的 marginV，按比例缩放到 overlay 高度
@@ -671,11 +684,17 @@ const FileList: React.FC = () => {
             .catch(() => { /* 没有 ASS 文件或加载失败，静默忽略 */ });
     }, [filterDanmaku, filterGift, filterGuard, filterSC]); // eslint-disable-line react-hooks/exhaustive-deps
 
-    // 过滤开关变化时刷新弹幕渲染器
+    // 过滤开关或设置变化时更新弹幕渲染器
     useEffect(() => {
-        if (!danmakuRef.current || !parsedItemsRef.current || !artRef.current) return;
-        const currentTime = danmakuRef.current.getCurrentTime();
-        danmakuRef.current.stop();
+        if (!parsedItemsRef.current || !artRef.current) return;
+
+        const filter = { danmaku: filterDanmaku, gift: filterGift, guard: filterGuard, sc: filterSC };
+
+        // 如果渲染器已存在，直接动态更新，不销毁重建
+        if (danmakuRef.current) {
+            danmakuRef.current.update(filter, danmakuSettings);
+            return;
+        }
 
         const artContainer = document.getElementById('art-container');
         if (!artContainer) return;
@@ -685,10 +704,12 @@ const FileList: React.FC = () => {
         artInner.appendChild(overlay);
 
         const { items, scrollTime, resY } = parsedItemsRef.current;
-        const renderer = new DanmakuRenderer(overlay, artRef.current.video, items, scrollTime, { danmaku: filterDanmaku, gift: filterGift, guard: filterGuard, sc: filterSC }, resY, danmakuSettings);
+        const renderer = new DanmakuRenderer(overlay, artRef.current.video, items, scrollTime, filter, resY, danmakuSettings);
         danmakuRef.current = renderer;
         renderer.start();
-        if (currentTime > 0) renderer.seek(currentTime);
+        if (artRef.current.video.currentTime > 0) {
+            renderer.seek(artRef.current.video.currentTime);
+        }
     }, [filterDanmaku, filterGift, filterGuard, filterSC, danmakuSettings]); // eslint-disable-line react-hooks/exhaustive-deps
 
     const showBatchRenameModal = () => {

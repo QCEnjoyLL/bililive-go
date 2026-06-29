@@ -258,7 +258,7 @@ func (w *AssWriter) AddDanmaku(recvAt time.Time, username, text string, color in
 	}
 	endCS := startCS + durationCS
 
-	lane, adjustedStartCS := w.assignLane(startCS, endCS, textWidth)
+	lane, adjustedStartCS := w.assignLane(startCS, textWidth)
 	// 基于文字宽度的防重叠：使用调整后的起始时间
 	if adjustedStartCS != startCS {
 		startCS = adjustedStartCS
@@ -314,7 +314,7 @@ func (w *AssWriter) AddGift(recvAt time.Time, username, giftName string, num int
 	}
 	endCS := startCS + durationCS
 
-	lane, adjustedStartCS := w.assignLane(startCS, endCS, textWidth)
+	lane, adjustedStartCS := w.assignLane(startCS, textWidth)
 	// 基于文字宽度的防重叠：使用调整后的起始时间
 	if adjustedStartCS != startCS {
 		startCS = adjustedStartCS
@@ -401,15 +401,17 @@ func (w *AssWriter) AddSuperChat(recvAt time.Time, username, text string, price 
 }
 
 // assignLane 分配一个空闲 lane，基于文字宽度的防重叠。
-// 参数：startCS 弹幕开始时间，endCS 弹幕结束时间，textWidth 文字像素宽度。
+// 参数：startCS 弹幕开始时间，textWidth 文字像素宽度。
 // 返回值：lane 索引、调整后的 startCS（可能延迟）。
-func (w *AssWriter) assignLane(startCS, endCS int64, textWidth int) (int, int64) {
+func (w *AssWriter) assignLane(startCS int64, textWidth int) (int, int64) {
+	// 安全间距：防止因字体渲染差异导致的重叠
+	safeTextWidth := textWidth + w.cfg.FontSize
 	// 优先找空闲 lane（前一条弹幕的尾部已离开屏幕右侧）
 	for i := 0; i < w.laneNum; i++ {
 		idx := (w.nextLane + i) % w.laneNum
 		if w.laneLast[idx] <= startCS {
 			// 存储该弹幕尾部离开右侧的时间点（用于下一条弹幕判断）
-			tailClearCS := startCS + int64(w.scrollTimeMs)*int64(textWidth)/int64(w.resX)/10
+			tailClearCS := startCS + int64(w.scrollTimeMs)*int64(safeTextWidth)/int64(w.resX)/10
 			w.laneLast[idx] = tailClearCS
 			w.nextLane = (idx + 1) % w.laneNum
 			return idx, startCS
@@ -424,7 +426,7 @@ func (w *AssWriter) assignLane(startCS, endCS int64, textWidth int) (int, int64)
 	}
 	newStartCS := w.laneLast[earliest]
 	// 存储新弹幕尾部离开右侧的时间点
-	tailClearCS := newStartCS + int64(w.scrollTimeMs)*int64(textWidth)/int64(w.resX)/10
+	tailClearCS := newStartCS + int64(w.scrollTimeMs)*int64(safeTextWidth)/int64(w.resX)/10
 	w.laneLast[earliest] = tailClearCS
 	w.nextLane = (earliest + 1) % w.laneNum
 	return earliest, newStartCS
