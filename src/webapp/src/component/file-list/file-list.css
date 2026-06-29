@@ -163,3 +163,17 @@
     font-weight: bold;
     will-change: left;
 }
+
+/* 播放器头部的复选框样式 */
+.player-header .ant-checkbox-wrapper {
+    color: #ffffffb3 !important;
+}
+
+.player-header .ant-checkbox-wrapper:hover .ant-checkbox-inner {
+    border-color: #1890ff;
+}
+
+.player-header .ant-checkbox-checked .ant-checkbox-inner {
+    background-color: #1890ff;
+    border-color: #1890ff;
+}

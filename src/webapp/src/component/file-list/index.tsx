@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import API from "../../utils/api";
-import { Breadcrumb, Table, Button, Modal, Input, Popconfirm, message, Space, Tooltip, Switch } from "antd";
+import { Breadcrumb, Table, Button, Modal, Input, Popconfirm, message, Space, Tooltip, Switch, Popover, Slider, Select, Checkbox } from "antd";
 import {
     // @ts-ignore
     FolderOutlined,
@@ -119,6 +119,24 @@ function parseAss(content: string): { items: DanmakuEntry[]; scrollTime: number;
     return { items, scrollTime: (bannerSpeed * resX) / 1000, resY };
 }
 
+// ==================== 弹幕设置 ====================
+
+export type DanmakuArea = 'full' | 'top' | 'bottom' | 'quarter' | 'three-quarter';
+
+export interface DanmakuSettings {
+    area: DanmakuArea;       // 渲染区域
+    fontSize: number;        // 字体大小 (12-48)
+    opacity: number;         // 透明度 (0.2-1.0)
+    scrollTime: number;      // 滚动时间 (3-20秒)
+}
+
+const DEFAULT_DANMAKU_SETTINGS: DanmakuSettings = {
+    area: 'full',
+    fontSize: 22,
+    opacity: 1.0,
+    scrollTime: 10,
+};
+
 // ==================== 弹幕渲染器 ====================
 
 const DANMAKU_FONT_SIZE = 22;
@@ -141,6 +159,7 @@ class DanmakuRenderer {
     private items: DanmakuEntry[];
     private scrollTime: number;
     private filter: DanmakuFilter;
+    private settings: DanmakuSettings;
     private rafId = 0;
     private running = false;
     private nextIdx = 0;
@@ -153,13 +172,26 @@ class DanmakuRenderer {
     // ASS 原始分辨率（用于 marginV 缩放）
     private resY = 1080;
 
-    constructor(overlay: HTMLDivElement, video: HTMLVideoElement, items: DanmakuEntry[], scrollTime: number, filter: DanmakuFilter, resY: number) {
+    constructor(overlay: HTMLDivElement, video: HTMLVideoElement, items: DanmakuEntry[], scrollTime: number, filter: DanmakuFilter, resY: number, settings: DanmakuSettings) {
         this.overlay = overlay;
         this.video = video;
         this.items = items.slice().sort((a, b) => a.start - b.start);
         this.scrollTime = scrollTime;
         this.filter = filter;
         this.resY = resY;
+        this.settings = settings;
+    }
+
+    /** 判断弹幕是否在指定区域内 */
+    private isInArea(marginV: number): boolean {
+        const ratio = marginV / this.resY;
+        switch (this.settings.area) {
+            case 'top': return ratio <= 0.5;
+            case 'bottom': return ratio > 0.5;
+            case 'quarter': return ratio <= 0.25;
+            case 'three-quarter': return ratio <= 0.75;
+            default: return true; // full
+        }
     }
 
     private matchesFilter(style: string): boolean {
@@ -270,10 +302,11 @@ class DanmakuRenderer {
             this.nextIdx++;
         }
 
-        // 4. 更新所有滚动弹幕位置
+        // 4. 更新所有滚动弹幕位置（使用 settings 中的 scrollTime）
+        const scrollTime = this.settings.scrollTime;
         for (const d of this.scrollEls) {
             const elapsed = t - d.spawnTime;
-            const progress = elapsed / this.scrollTime;
+            const progress = elapsed / scrollTime;
             const el = d.el;
             const twPct = parseFloat(el.dataset.tw || '20');
             const leftPct = 100 - progress * (100 + twPct);
@@ -283,37 +316,44 @@ class DanmakuRenderer {
 
     /** 估算文本宽度（px），处理 surrogate pair 和粗体 */
     private estimateTextWidth(text: string): number {
+        const fontSize = this.settings.fontSize;
         let px = 0;
         for (const ch of text) {
             const code = ch.codePointAt(0)!;
             if (code > 0xFFFF) {
                 // emoji / 扩展 CJK，算 2 个字符宽
-                px += DANMAKU_FONT_SIZE * 2;
+                px += fontSize * 2;
             } else if (code > 0x7F) {
                 // CJK / 全角
-                px += DANMAKU_FONT_SIZE;
+                px += fontSize;
             } else {
                 // ASCII（粗体下约 0.65x）
-                px += DANMAKU_FONT_SIZE * 0.65;
+                px += fontSize * 0.65;
             }
         }
         return px;
     }
 
     private spawnScroll(item: DanmakuEntry, t: number, cw: number, ch: number) {
+        // 区域过滤：跳过不在指定区域的弹幕
+        if (!this.isInArea(item.marginV)) return;
+
+        const fontSize = this.settings.fontSize;
+        const scrollTime = this.settings.scrollTime;
         const textPx = this.estimateTextWidth(item.text);
         const twPct = (textPx / cw) * 100;
 
-        // 计算结束时间（从 ASS 的 start + scrollTime）
-        const endTime = item.start + this.scrollTime + (textPx / cw) * this.scrollTime;
+        // 计算结束时间（使用 settings 中的 scrollTime）
+        const endTime = item.start + scrollTime + (textPx / cw) * scrollTime;
 
         // 创建 DOM
         const el = document.createElement('div');
         el.className = 'danmaku-item';
         el.textContent = item.text;
         el.style.color = item.color;
-        el.style.fontSize = DANMAKU_FONT_SIZE + 'px';
-        el.style.lineHeight = (DANMAKU_FONT_SIZE + 4) + 'px';
+        el.style.fontSize = fontSize + 'px';
+        el.style.lineHeight = (fontSize + 4) + 'px';
+        el.style.opacity = String(this.settings.opacity);
         el.style.textShadow = '1px 1px 2px rgba(0,0,0,0.8),-1px -1px 2px rgba(0,0,0,0.8),1px -1px 2px rgba(0,0,0,0.8),-1px 1px 2px rgba(0,0,0,0.8)';
 
         // 直接使用 ASS 的 marginV，按比例缩放到 overlay 高度
@@ -443,6 +483,7 @@ const FileList: React.FC = () => {
     const [filterGift, setFilterGift] = useState(true);
     const [filterGuard, setFilterGuard] = useState(true);
     const [filterSC, setFilterSC] = useState(true);
+    const [danmakuSettings, setDanmakuSettings] = useState<DanmakuSettings>(DEFAULT_DANMAKU_SETTINGS);
     const parsedItemsRef = useRef<{ items: DanmakuEntry[]; scrollTime: number; resY: number } | null>(null);
     const currentPlayingRef = useRef<{ record: CurrentFolderFile; fullPath: string } | null>(null);
 
@@ -620,7 +661,7 @@ const FileList: React.FC = () => {
                 overlay.className = 'danmaku-overlay';
                 artInner.appendChild(overlay);
 
-                const renderer = new DanmakuRenderer(overlay, artRef.current!.video, items, scrollTime, { danmaku: filterDanmaku, gift: filterGift, guard: filterGuard, sc: filterSC }, resY);
+                const renderer = new DanmakuRenderer(overlay, artRef.current!.video, items, scrollTime, { danmaku: filterDanmaku, gift: filterGift, guard: filterGuard, sc: filterSC }, resY, danmakuSettings);
                 danmakuRef.current = renderer;
                 renderer.start();
                 if (artRef.current!.video.currentTime > 0) {
@@ -644,11 +685,11 @@ const FileList: React.FC = () => {
         artInner.appendChild(overlay);
 
         const { items, scrollTime, resY } = parsedItemsRef.current;
-        const renderer = new DanmakuRenderer(overlay, artRef.current.video, items, scrollTime, { danmaku: filterDanmaku, gift: filterGift, guard: filterGuard, sc: filterSC }, resY);
+        const renderer = new DanmakuRenderer(overlay, artRef.current.video, items, scrollTime, { danmaku: filterDanmaku, gift: filterGift, guard: filterGuard, sc: filterSC }, resY, danmakuSettings);
         danmakuRef.current = renderer;
         renderer.start();
         if (currentTime > 0) renderer.seek(currentTime);
-    }, [filterDanmaku, filterGift, filterGuard, filterSC]); // eslint-disable-line react-hooks/exhaustive-deps
+    }, [filterDanmaku, filterGift, filterGuard, filterSC, danmakuSettings]); // eslint-disable-line react-hooks/exhaustive-deps
 
     const showBatchRenameModal = () => {
         setBatchFind("");
@@ -995,7 +1036,7 @@ const FileList: React.FC = () => {
                                 overlay.className = 'danmaku-overlay';
                                 artInner.appendChild(overlay);
 
-                                const renderer = new DanmakuRenderer(overlay, art.video, items, scrollTime, { danmaku: filterDanmaku, gift: filterGift, guard: filterGuard, sc: filterSC }, resY);
+                                const renderer = new DanmakuRenderer(overlay, art.video, items, scrollTime, { danmaku: filterDanmaku, gift: filterGift, guard: filterGuard, sc: filterSC }, resY, danmakuSettings);
                                 danmakuRef.current = renderer;
                                 renderer.start();
                                 // 如果浏览器恢复了播放位置，跳转到当前时间
@@ -1177,7 +1218,7 @@ const FileList: React.FC = () => {
                     </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
                         {hasAss && (
-                            <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, fontWeight: 400 }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, fontWeight: 400 }}>
                                 <span style={{ color: loadDanmaku ? '#1890ff' : '#ffffff73' }}>弹幕</span>
                                 <Switch
                                     size="small"
@@ -1187,20 +1228,79 @@ const FileList: React.FC = () => {
                                 {loadDanmaku && (
                                     <>
                                         <span style={{ color: '#ffffff40' }}>|</span>
-                                        {([
-                                            { label: '文字', checked: filterDanmaku, onChange: setFilterDanmaku },
-                                            { label: '礼物', checked: filterGift, onChange: setFilterGift },
-                                            { label: '上舰', checked: filterGuard, onChange: setFilterGuard },
-                                            { label: 'SC', checked: filterSC, onChange: setFilterSC },
-                                        ] as const).map(({ label, checked, onChange }) => (
-                                            <div key={label} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12 }}>
-                                                <span style={{ color: checked ? '#1890ff' : '#ffffff73' }}>{label}</span>
-                                                <Switch size="small" checked={checked} onChange={onChange} />
-                                            </div>
-                                        ))}
+                                        <Checkbox checked={filterDanmaku} onChange={(e) => setFilterDanmaku(e.target.checked)}>
+                                            <span style={{ fontSize: 12 }}>文字</span>
+                                        </Checkbox>
+                                        <Checkbox checked={filterGift} onChange={(e) => setFilterGift(e.target.checked)}>
+                                            <span style={{ fontSize: 12 }}>礼物</span>
+                                        </Checkbox>
+                                        <Checkbox checked={filterGuard} onChange={(e) => setFilterGuard(e.target.checked)}>
+                                            <span style={{ fontSize: 12 }}>上舰</span>
+                                        </Checkbox>
+                                        <Checkbox checked={filterSC} onChange={(e) => setFilterSC(e.target.checked)}>
+                                            <span style={{ fontSize: 12 }}>SC</span>
+                                        </Checkbox>
                                     </>
                                 )}
                             </div>
+                        )}
+                        {hasAss && loadDanmaku && (
+                            <Popover
+                                content={
+                                    <div style={{ width: 220 }}>
+                                        <div style={{ marginBottom: 12 }}>
+                                            <div style={{ marginBottom: 4, fontSize: 12, color: '#999' }}>显示区域</div>
+                                            <Select
+                                                value={danmakuSettings.area}
+                                                onChange={(v) => setDanmakuSettings(s => ({ ...s, area: v }))}
+                                                style={{ width: '100%' }}
+                                                size="small"
+                                                options={[
+                                                    { label: '全屏', value: 'full' },
+                                                    { label: '顶部半屏', value: 'top' },
+                                                    { label: '底部半屏', value: 'bottom' },
+                                                    { label: '顶部1/4屏', value: 'quarter' },
+                                                    { label: '顶部3/4屏', value: 'three-quarter' },
+                                                ]}
+                                            />
+                                        </div>
+                                        <div style={{ marginBottom: 12 }}>
+                                            <div style={{ marginBottom: 4, fontSize: 12, color: '#999' }}>字体大小: {danmakuSettings.fontSize}px</div>
+                                            <Slider
+                                                min={12}
+                                                max={48}
+                                                value={danmakuSettings.fontSize}
+                                                onChange={(v) => setDanmakuSettings(s => ({ ...s, fontSize: v }))}
+                                            />
+                                        </div>
+                                        <div style={{ marginBottom: 12 }}>
+                                            <div style={{ marginBottom: 4, fontSize: 12, color: '#999' }}>透明度: {Math.round(danmakuSettings.opacity * 100)}%</div>
+                                            <Slider
+                                                min={20}
+                                                max={100}
+                                                value={Math.round(danmakuSettings.opacity * 100)}
+                                                onChange={(v) => setDanmakuSettings(s => ({ ...s, opacity: v / 100 }))}
+                                            />
+                                        </div>
+                                        <div>
+                                            <div style={{ marginBottom: 4, fontSize: 12, color: '#999' }}>滚动速度: {danmakuSettings.scrollTime}秒</div>
+                                            <Slider
+                                                min={3}
+                                                max={20}
+                                                value={danmakuSettings.scrollTime}
+                                                onChange={(v) => setDanmakuSettings(s => ({ ...s, scrollTime: v }))}
+                                            />
+                                        </div>
+                                        <div style={{ marginTop: 8, textAlign: 'right' }}>
+                                            <Button size="small" onClick={() => setDanmakuSettings(DEFAULT_DANMAKU_SETTINGS)}>恢复默认</Button>
+                                        </div>
+                                    </div>
+                                }
+                                trigger="click"
+                                placement="bottomRight"
+                            >
+                                <span style={{ color: '#1890ff', cursor: 'pointer', fontSize: 13, fontWeight: 600, background: '#e6f4ff', padding: '2px 8px', borderRadius: 4 }}>弹</span>
+                            </Popover>
                         )}
                         <div className="close-btn" onClick={hidePlayer} title="退出播放 (Esc)">
                             <CloseOutlined />

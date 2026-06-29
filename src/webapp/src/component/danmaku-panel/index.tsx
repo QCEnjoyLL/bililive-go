@@ -5,7 +5,7 @@ import {
 } from '@ant-design/icons';
 import './danmaku-panel.css';
 
-const MAX_MESSAGES = 500;
+const MAX_MESSAGES = 5000;
 const ITEM_HEIGHT = 32;
 const OVERSCAN = 5;
 
@@ -324,9 +324,6 @@ const DanmakuPanel: React.FC<DanmakuPanelProps> = ({ messages }) => {
         <span>
           {isAllFiltered ? `共 ${displayMessages.length} 条` : `已筛选 ${filteredMessages.length}/${displayMessages.length} 条`}
         </span>
-        {displayMessages.length >= MAX_MESSAGES && (
-          <span className="dm-limit-hint">（已达上限）</span>
-        )}
         {autoScroll && (
           <span className="dm-autoscroll-hint">自动滚动中</span>
         )}
