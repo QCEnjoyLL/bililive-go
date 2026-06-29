@@ -28,7 +28,7 @@ type AssWriter struct {
 	laneEnd      int // last usable lane index (exclusive)
 	laneNum      int // total lanes in the usable range
 	nextLane     int
-	laneLast     []int64 // last end time (centiseconds) per lane
+	laneLast     []int64 // last tail-clear time (centiseconds) per lane
 }
 
 func parseResolution(res string) (int, int) {
@@ -72,6 +72,10 @@ func NewAssWriter(filePath string, startAt time.Time, cfg configs.DanmakuConfig,
 		laneEnd = totalLanes / 2
 	case "bottom":
 		laneStart = totalLanes / 2
+	case "quarter":
+		laneEnd = totalLanes / 4
+	case "three-quarter":
+		laneEnd = totalLanes * 3 / 4
 	}
 	laneNum := laneEnd - laneStart
 	if laneNum < 1 {
@@ -84,14 +88,14 @@ func NewAssWriter(filePath string, startAt time.Time, cfg configs.DanmakuConfig,
 		cfg:          cfg,
 		title:        title,
 		resX:         resX,
-		resY:        resY,
+		resY:         resY,
 		scrollTimeMs: scrollTimeMs,
-		bannerSpeed: bannerSpeed,
-		laneStart:   laneStart,
-		laneEnd:     laneEnd,
-		laneNum:     laneNum,
-		nextLane:    0,
-		laneLast:    make([]int64, laneNum),
+		bannerSpeed:  bannerSpeed,
+		laneStart:    laneStart,
+		laneEnd:      laneEnd,
+		laneNum:      laneNum,
+		nextLane:     0,
+		laneLast:     make([]int64, laneNum),
 	}
 
 	if err := w.writeHeader(); err != nil {
@@ -254,7 +258,12 @@ func (w *AssWriter) AddDanmaku(recvAt time.Time, username, text string, color in
 	}
 	endCS := startCS + durationCS
 
-	lane := w.assignLane(startCS, endCS)
+	lane, adjustedStartCS := w.assignLane(startCS, endCS, textWidth)
+	// 基于文字宽度的防重叠：使用调整后的起始时间
+	if adjustedStartCS != startCS {
+		startCS = adjustedStartCS
+		endCS = startCS + durationCS
+	}
 	laneHeight := w.cfg.FontSize + 4
 	marginV := (lane + w.laneStart) * laneHeight
 
@@ -305,7 +314,12 @@ func (w *AssWriter) AddGift(recvAt time.Time, username, giftName string, num int
 	}
 	endCS := startCS + durationCS
 
-	lane := w.assignLane(startCS, endCS)
+	lane, adjustedStartCS := w.assignLane(startCS, endCS, textWidth)
+	// 基于文字宽度的防重叠：使用调整后的起始时间
+	if adjustedStartCS != startCS {
+		startCS = adjustedStartCS
+		endCS = startCS + durationCS
+	}
 	laneHeight := w.cfg.FontSize + 4
 	marginV := (lane + w.laneStart) * laneHeight
 
@@ -386,24 +400,34 @@ func (w *AssWriter) AddSuperChat(recvAt time.Time, username, text string, price 
 	}
 }
 
-func (w *AssWriter) assignLane(startCS, endCS int64) int {
+// assignLane 分配一个空闲 lane，基于文字宽度的防重叠。
+// 参数：startCS 弹幕开始时间，endCS 弹幕结束时间，textWidth 文字像素宽度。
+// 返回值：lane 索引、调整后的 startCS（可能延迟）。
+func (w *AssWriter) assignLane(startCS, endCS int64, textWidth int) (int, int64) {
+	// 优先找空闲 lane（前一条弹幕的尾部已离开屏幕右侧）
 	for i := 0; i < w.laneNum; i++ {
 		idx := (w.nextLane + i) % w.laneNum
 		if w.laneLast[idx] <= startCS {
-			w.laneLast[idx] = endCS
+			// 存储该弹幕尾部离开右侧的时间点（用于下一条弹幕判断）
+			tailClearCS := startCS + int64(w.scrollTimeMs)*int64(textWidth)/int64(w.resX)/10
+			w.laneLast[idx] = tailClearCS
 			w.nextLane = (idx + 1) % w.laneNum
-			return idx
+			return idx, startCS
 		}
 	}
+	// 所有 lane 都被占用，延迟到最早可用的时间点
 	earliest := 0
 	for i := 1; i < w.laneNum; i++ {
 		if w.laneLast[i] < w.laneLast[earliest] {
 			earliest = i
 		}
 	}
-	w.laneLast[earliest] = endCS
+	newStartCS := w.laneLast[earliest]
+	// 存储新弹幕尾部离开右侧的时间点
+	tailClearCS := newStartCS + int64(w.scrollTimeMs)*int64(textWidth)/int64(w.resX)/10
+	w.laneLast[earliest] = tailClearCS
 	w.nextLane = (earliest + 1) % w.laneNum
-	return earliest
+	return earliest, newStartCS
 }
 
 func (w *AssWriter) OutputPath() string {

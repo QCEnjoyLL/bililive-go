@@ -175,6 +175,8 @@ const DanmakuParamForm: React.FC<{
             { label: '全屏', value: 'full' },
             { label: '顶部半屏', value: 'top' },
             { label: '底部半屏', value: 'bottom' },
+            { label: '1/4屏', value: 'quarter' },
+            { label: '3/4屏', value: 'three-quarter' },
           ]} />
         </Form.Item>
         <Form.Item

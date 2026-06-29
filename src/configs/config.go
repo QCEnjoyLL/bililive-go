@@ -121,7 +121,7 @@ func (f *Feature) GetEffectiveDownloaderType() DownloaderType {
 type DanmakuConfig struct {
 	FontSize         int    `yaml:"font_size" json:"font_size"`                                       // 字体大小 (12~120)
 	FontName         string `yaml:"font_name" json:"font_name"`                                       // 字体名称
-	ScrollArea       string `yaml:"scroll_area" json:"scroll_area"`                                   // 滚动区域: full(全屏), top(顶部), bottom(底部)
+	ScrollArea       string `yaml:"scroll_area" json:"scroll_area"`                                   // 滚动区域: full(全屏), top(顶部半屏), bottom(底部半屏), quarter(1/4屏), three-quarter(3/4屏)
 	ScrollTime       int    `yaml:"scroll_time" json:"scroll_time"`                                   // 弹幕滚过屏幕的秒数 (5~20)
 	Resolution       string `yaml:"resolution" json:"resolution"`                                     // 播放分辨率
 	Outline          *int   `yaml:"outline,omitempty" json:"outline,omitempty"`                       // 描边粗细 (0~4)，nil 表示使用默认值
@@ -159,9 +159,11 @@ var defaultDanmakuConfig = DanmakuConfig{
 
 // validScrollAreas 支持的滚动区域
 var validScrollAreas = map[string]bool{
-	"full":   true, // 全屏滚动
-	"top":    true, // 仅在屏幕上半部分滚动
-	"bottom": true, // 仅在屏幕下半部分滚动
+	"full":            true, // 全屏滚动
+	"top":             true, // 仅在屏幕上半部分滚动
+	"bottom":          true, // 仅在屏幕下半部分滚动
+	"quarter":         true, // 仅在屏幕上1/4部分滚动
+	"three-quarter":   true, // 仅在屏幕上3/4部分滚动
 }
 
 // validResolutions 支持的分辨率列表
@@ -268,7 +270,7 @@ func (d *DanmakuConfig) ValidateWithPlatform(platformKey string) error {
 		return fmt.Errorf("字体名称不能为空")
 	}
 	if !validScrollAreas[d.ScrollArea] {
-		return fmt.Errorf("不支持的滚动区域: %s，可选值: full, top, bottom", d.ScrollArea)
+		return fmt.Errorf("不支持的滚动区域: %s，可选值: full, top, bottom, quarter, three-quarter", d.ScrollArea)
 	}
 	if d.ScrollTime < 5 || d.ScrollTime > 20 {
 		return fmt.Errorf("滚动时间必须在 5~20 秒之间，当前值: %d", d.ScrollTime)
