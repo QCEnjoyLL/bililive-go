@@ -577,21 +577,29 @@ const webAuthLoginHTML = `<!doctype html>
       font-size: 14px;
       font-weight: 650;
     }
-    input {
+    #login-form input {
       width: 100%;
       height: 46px;
       border: 1px solid var(--line);
       border-radius: 8px;
       background: var(--input);
       color: var(--ink);
-      padding: 0 13px;
+      padding: 0 18px;
       font-size: 15px;
       outline: none;
+      appearance: none;
+      -webkit-appearance: none;
       transition: border-color .16s ease, box-shadow .16s ease, background .16s ease;
     }
-    input:focus {
+    #login-form input:focus {
       border-color: var(--line-strong);
       box-shadow: 0 0 0 3px var(--focus);
+    }
+    #login-form input:-webkit-autofill,
+    #login-form input:-webkit-autofill:hover,
+    #login-form input:-webkit-autofill:focus {
+      -webkit-text-fill-color: var(--ink);
+      box-shadow: 0 0 0 1000px var(--input) inset;
     }
     .submit-button {
       width: 100%;

@@ -13,10 +13,6 @@ import {
   ExclamationCircleOutlined, MobileOutlined, WechatOutlined
 } from '@ant-design/icons';
 import { useLocation, Link } from 'react-router-dom';
-import Editor from 'react-simple-code-editor';
-import { highlight, languages } from 'prismjs';
-import 'prismjs/components/prism-yaml';
-import 'prismjs/themes/prism.css';
 import API from '../../utils/api';
 import './config-info.css';
 import './config-gui.css';
@@ -2585,19 +2581,20 @@ const ConfigInfo: React.FC = () => {
   // YAML 模式内容
   const renderYamlMode = () => (
     <div className="config-content">
-      <Editor
-        value={rawConfig}
-        onValueChange={code => setRawConfig(code)}
-        highlight={code => highlight(code, languages.yaml, 'yaml')}
-        padding={10}
-        style={{
-          fontFamily: '"Fira code", "Fira Mono", monospace',
-          fontSize: 14,
-          border: '1px solid #d9d9d9',
-          borderRadius: 4,
-          minHeight: 400
-        }}
-      />
+      <div className="config-yaml-editor-wrap">
+        <TextArea
+          className="config-yaml-textarea"
+          value={rawConfig}
+          onChange={event => setRawConfig(event.target.value)}
+          spellCheck={false}
+          style={{
+            fontFamily: '"Fira code", "Fira Mono", monospace',
+            fontSize: 14,
+            lineHeight: 1.6,
+            minHeight: 'calc(100vh - 220px)',
+          }}
+        />
+      </div>
       <div className="config-actions config-floating-actions">
         <Button
           type="primary"

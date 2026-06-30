@@ -1,4 +1,36 @@
-/* workaround for compatibility bug when using antd and react-simple-code-editor together*/
-pre+textarea::selection {
-  -webkit-text-fill-color: white
+.config-yaml-editor-wrap {
+  color: var(--bgo-text);
+  width: 100%;
+}
+
+.config-yaml-textarea.ant-input {
+  background: var(--bgo-elevated-bg) !important;
+  border-color: var(--bgo-border) !important;
+  border-radius: 6px !important;
+  color: var(--bgo-text) !important;
+  caret-color: var(--bgo-text) !important;
+  resize: vertical;
+  tab-size: 2;
+  white-space: pre;
+  word-break: normal;
+  overflow-wrap: normal;
+  overflow-x: auto;
+}
+
+.config-yaml-textarea.ant-input:hover,
+.config-yaml-textarea.ant-input:focus {
+  border-color: var(--bgo-accent) !important;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--bgo-accent) 18%, transparent) !important;
+}
+
+.config-yaml-textarea.ant-input::selection {
+  background: color-mix(in srgb, var(--bgo-accent) 72%, #1455d9);
+  color: #ffffff;
+  -webkit-text-fill-color: #ffffff;
+}
+
+html[data-bgo-theme='dark'] .config-yaml-textarea.ant-input {
+  background: color-mix(in srgb, var(--bgo-elevated-bg) 82%, #0b1118) !important;
+  color: var(--bgo-text) !important;
+  -webkit-text-fill-color: var(--bgo-text) !important;
 }

@@ -2,6 +2,8 @@ package servers
 
 import (
 	"bytes"
+	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httputil"
@@ -20,6 +22,290 @@ func newExternalThemeReverseProxy(target *url.URL) *httputil.ReverseProxy {
 	}
 	proxy.ModifyResponse = injectExternalThemeResponse
 	return proxy
+}
+
+func newToolsExternalThemeReverseProxy(target *url.URL) http.Handler {
+	return guardProtectedToolUninstall(target, newExternalThemeReverseProxy(target))
+}
+
+type remoteToolGroupStatus struct {
+	Name          string                 `json:"name"`
+	PinnedVersion string                 `json:"pinnedVersion,omitempty"`
+	Tools         []remoteToolItemStatus `json:"tools"`
+}
+
+type remoteToolItemStatus struct {
+	Version   string `json:"version"`
+	Installed bool   `json:"installed"`
+}
+
+type remoteToolUninstallRequest struct {
+	ToolName string `json:"toolName"`
+	Version  string `json:"version"`
+}
+
+type remoteToolToggleRequest struct {
+	ToolName string `json:"toolName"`
+	Enabled  bool   `json:"enabled"`
+}
+
+var requiredRemoteToolNames = map[string]struct{}{
+	"ffmpeg":             {},
+	"dotnet":             {},
+	"bililive-tools":     {},
+	"node":               {},
+	"bililive-scheduler": {},
+}
+
+var internalRemoteToolNames = map[string]struct{}{
+	"bililive-go": {},
+	"klive":       {},
+}
+
+const (
+	requiredToolLastVersionUninstallMessage = "\u8fd9\u662f\u5fc5\u9700 / \u9ed8\u8ba4\u5b89\u88c5\u5de5\u5177\uff0c\u5f55\u5236\u548c\u76f8\u5173\u529f\u80fd\u81f3\u5c11\u9700\u8981\u4fdd\u7559\u4e00\u4e2a\u5df2\u5b89\u88c5\u7248\u672c\uff0c\u4e0d\u80fd\u5378\u8f7d\u6240\u6709\u7248\u672c\u3002\u8bf7\u5148\u5b89\u88c5\u8be5\u5de5\u5177\u7684\u5176\u4ed6\u7248\u672c\uff0c\u786e\u8ba4\u53ef\u7528\u540e\u518d\u5378\u8f7d\u5f53\u524d\u7248\u672c\u3002"
+	uninstalledToolVersionMessage           = "\u8be5\u7248\u672c\u5c1a\u672a\u5b89\u88c5\uff0c\u65e0\u9700\u5378\u8f7d\u3002"
+	internalToolUninstallMessage            = "\u8fd9\u662f BiliLive-go \u81ea\u52a8\u7ba1\u7406\u7684\u5185\u90e8\u7ec4\u4ef6\uff0c\u4e0d\u80fd\u901a\u8fc7\u5916\u90e8\u5de5\u5177\u9875\u624b\u52a8\u5378\u8f7d\u3002"
+	internalToolToggleMessage               = "\u8fd9\u662f BiliLive-go \u81ea\u52a8\u7ba1\u7406\u7684\u5185\u90e8\u7ec4\u4ef6\uff0c\u4e0d\u80fd\u901a\u8fc7\u5916\u90e8\u5de5\u5177\u9875\u624b\u52a8\u542f\u7528\u6216\u7981\u7528\u3002"
+	requiredToolDisableMessage              = "\u8fd9\u662f\u5fc5\u9700 / \u9ed8\u8ba4\u5b89\u88c5\u5de5\u5177\uff0c\u5f55\u5236\u548c\u76f8\u5173\u529f\u80fd\u4f9d\u8d56\u5b83\u4fdd\u6301\u542f\u7528\uff0c\u4e0d\u80fd\u505c\u7528\u3002"
+	enableMissingToolGroupMessage           = "\u8be5\u5de5\u5177\u7ec4\u6ca1\u6709\u4efb\u4f55\u5df2\u5b89\u88c5\u7248\u672c\uff0c\u4e0d\u80fd\u542f\u7528\u3002\u8bf7\u5148\u5b89\u88c5\u4e00\u4e2a\u7248\u672c\uff0c\u518d\u542f\u7528\u8be5\u5de5\u5177\u7ec4\u3002"
+	enablePinnedMissingToolGroupMessage     = "\u8be5\u5de5\u5177\u7ec4\u5f53\u524d\u6307\u5411\u7684\u7248\u672c\u5c1a\u672a\u5b89\u88c5\uff0c\u4e0d\u80fd\u542f\u7528\u3002\u8bf7\u5148\u5b89\u88c5\u5f53\u524d\u7248\u672c\uff0c\u6216\u5207\u6362\u5230\u5df2\u5b89\u88c5\u7248\u672c\u3002"
+)
+
+func writeRemoteToolGuardError(w http.ResponseWriter, status int, msg string) {
+	w.Header().Set(contentType, contentTypeJSON)
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(commonResp{
+		ErrNo:  status,
+		ErrMsg: msg,
+		Data:   map[string]string{"reason": msg},
+	})
+}
+
+func guardProtectedToolUninstall(target *url.URL, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			path := strings.TrimRight(r.URL.Path, "/")
+			if path != "/api/uninstall" && path != "/api/toggle" {
+				next.ServeHTTP(w, r)
+				return
+			}
+
+			body, err := readAndRestoreRequestBody(r)
+			if err != nil {
+				writeRemoteToolGuardError(w, http.StatusBadRequest, "读取工具请求失败: "+err.Error())
+				return
+			}
+
+			if path == "/api/uninstall" {
+				var req remoteToolUninstallRequest
+				if err := json.Unmarshal(body, &req); err == nil {
+					if isInternalRemoteTool(req.ToolName) {
+						writeRemoteToolGuardError(w, http.StatusConflict, internalToolUninstallMessage)
+						return
+					}
+
+					decision, err := shouldBlockRemoteToolUninstall(r, target, req)
+					if err != nil {
+						if isRequiredRemoteTool(req.ToolName) {
+							writeRemoteToolGuardError(w, http.StatusBadGateway, "无法确认必需工具安装状态，已取消卸载: "+err.Error())
+							return
+						}
+					} else if decision.block {
+						writeRemoteToolGuardError(w, http.StatusConflict, decision.reason)
+						return
+					}
+				}
+			}
+
+			if path == "/api/toggle" {
+				var req remoteToolToggleRequest
+				if err := json.Unmarshal(body, &req); err == nil {
+					decision, err := shouldBlockRemoteToolToggle(r, target, req)
+					if err != nil {
+						writeRemoteToolGuardError(w, http.StatusBadGateway, "无法确认工具安装状态，已取消启用: "+err.Error())
+						return
+					}
+					if decision.block {
+						writeRemoteToolGuardError(w, http.StatusConflict, decision.reason)
+						return
+					}
+				}
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func readAndRestoreRequestBody(r *http.Request) ([]byte, error) {
+	body, err := io.ReadAll(r.Body)
+	closeErr := r.Body.Close()
+	if err != nil {
+		return nil, err
+	}
+	if closeErr != nil {
+		return nil, closeErr
+	}
+	r.Body = io.NopCloser(bytes.NewReader(body))
+	return body, nil
+}
+
+func shouldBlockRemoteToolToggle(r *http.Request, target *url.URL, req remoteToolToggleRequest) (uninstallGuardDecision, error) {
+	if strings.TrimSpace(req.ToolName) == "" {
+		return uninstallGuardDecision{}, nil
+	}
+	if isInternalRemoteTool(req.ToolName) {
+		return uninstallGuardDecision{
+			block:  true,
+			reason: internalToolToggleMessage,
+		}, nil
+	}
+	if !req.Enabled {
+		if isRequiredRemoteTool(req.ToolName) {
+			return uninstallGuardDecision{
+				block:  true,
+				reason: requiredToolDisableMessage,
+			}, nil
+		}
+		return uninstallGuardDecision{}, nil
+	}
+
+	groups, err := fetchRemoteToolGroups(r, target)
+	if err != nil {
+		return uninstallGuardDecision{}, err
+	}
+	return decideRemoteToolEnable(req, groups)
+}
+
+func decideRemoteToolEnable(req remoteToolToggleRequest, groups []remoteToolGroupStatus) (uninstallGuardDecision, error) {
+	groupName := normalizeRemoteToolName(req.ToolName)
+	for _, group := range groups {
+		if normalizeRemoteToolName(group.Name) != groupName {
+			continue
+		}
+
+		installedCount := 0
+		pinnedVersion := strings.TrimSpace(group.PinnedVersion)
+		pinnedInstalled := pinnedVersion == ""
+		for _, tool := range group.Tools {
+			if !tool.Installed {
+				continue
+			}
+			installedCount++
+			if tool.Version == pinnedVersion {
+				pinnedInstalled = true
+			}
+		}
+
+		if installedCount == 0 {
+			return uninstallGuardDecision{
+				block:  true,
+				reason: enableMissingToolGroupMessage,
+			}, nil
+		}
+		if !pinnedInstalled {
+			return uninstallGuardDecision{
+				block:  true,
+				reason: enablePinnedMissingToolGroupMessage,
+			}, nil
+		}
+		return uninstallGuardDecision{}, nil
+	}
+
+	return uninstallGuardDecision{}, fmt.Errorf("\u672a\u627e\u5230\u5de5\u5177\u7ec4 %s", req.ToolName)
+}
+
+type uninstallGuardDecision struct {
+	block  bool
+	reason string
+}
+
+func shouldBlockRemoteToolUninstall(r *http.Request, target *url.URL, req remoteToolUninstallRequest) (uninstallGuardDecision, error) {
+	if strings.TrimSpace(req.ToolName) == "" || strings.TrimSpace(req.Version) == "" {
+		return uninstallGuardDecision{}, nil
+	}
+
+	groups, err := fetchRemoteToolGroups(r, target)
+	if err != nil {
+		return uninstallGuardDecision{}, err
+	}
+	return decideRemoteToolUninstall(req, groups)
+}
+
+func decideRemoteToolUninstall(req remoteToolUninstallRequest, groups []remoteToolGroupStatus) (uninstallGuardDecision, error) {
+	groupName := normalizeRemoteToolName(req.ToolName)
+	for _, group := range groups {
+		if normalizeRemoteToolName(group.Name) != groupName {
+			continue
+		}
+
+		installedCount := 0
+		targetInstalled := false
+		for _, tool := range group.Tools {
+			if tool.Installed {
+				installedCount++
+				if tool.Version == req.Version {
+					targetInstalled = true
+				}
+			}
+		}
+
+		if !targetInstalled {
+			return uninstallGuardDecision{
+				block:  true,
+				reason: uninstalledToolVersionMessage,
+			}, nil
+		}
+		if isRequiredRemoteTool(req.ToolName) && installedCount <= 1 {
+			return uninstallGuardDecision{
+				block:  true,
+				reason: requiredToolLastVersionUninstallMessage,
+			}, nil
+		}
+		return uninstallGuardDecision{}, nil
+	}
+
+	return uninstallGuardDecision{}, fmt.Errorf("\u672a\u627e\u5230\u5de5\u5177\u7ec4 %s", req.ToolName)
+}
+
+func fetchRemoteToolGroups(r *http.Request, target *url.URL) ([]remoteToolGroupStatus, error) {
+	statusURL := *target
+	statusURL.Path = strings.TrimRight(statusURL.Path, "/") + "/api/tools"
+	statusURL.RawQuery = ""
+	statusURL.Fragment = ""
+
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, statusURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("RemoteTools 返回状态码 %d", resp.StatusCode)
+	}
+
+	var groups []remoteToolGroupStatus
+	if err := json.NewDecoder(resp.Body).Decode(&groups); err != nil {
+		return nil, err
+	}
+	return groups, nil
+}
+
+func isRequiredRemoteTool(toolName string) bool {
+	_, ok := requiredRemoteToolNames[normalizeRemoteToolName(toolName)]
+	return ok
+}
+
+func isInternalRemoteTool(toolName string) bool {
+	_, ok := internalRemoteToolNames[normalizeRemoteToolName(toolName)]
+	return ok
+}
+
+func normalizeRemoteToolName(toolName string) string {
+	return strings.ToLower(strings.TrimSpace(toolName))
 }
 
 func injectExternalThemeResponse(resp *http.Response) error {
@@ -226,9 +512,13 @@ const externalThemeBridgeHTML = `
       'html.bgo-external-theme[data-bgo-theme="dark"] :where(.bg-gray-200,.bg-slate-200,.bg-zinc-200,.bg-neutral-200,.bg-secondary,.bg-muted,[class*="bg-gray-200"],[class*="bg-slate-200"],[class*="bg-zinc-200"],[class*="bg-neutral-200"],[class*="bg-secondary"],[class*="bg-muted"]){background-color:color-mix(in srgb,var(--bgo-ext-panel-bg,var(--bgo-panel-bg)) 82%,var(--bgo-ext-page-bg,var(--bgo-page-bg)))!important;border-color:var(--bgo-ext-border,var(--bgo-border))!important;color:var(--bgo-ext-text,var(--bgo-text))!important;}',
       'html.bgo-external-theme[data-bgo-theme="dark"] input,html.bgo-external-theme[data-bgo-theme="dark"] textarea,html.bgo-external-theme[data-bgo-theme="dark"] select,html.bgo-external-theme[data-bgo-theme="dark"] .ant-input,html.bgo-external-theme[data-bgo-theme="dark"] .ant-input-number,html.bgo-external-theme[data-bgo-theme="dark"] .ant-select-selector,html.bgo-external-theme[data-bgo-theme="dark"] .ant-picker{background-color:color-mix(in srgb,var(--bgo-ext-panel-bg,var(--bgo-panel-bg)) 78%,var(--bgo-ext-page-bg,var(--bgo-page-bg)))!important;border-color:var(--bgo-ext-border,var(--bgo-border))!important;color:var(--bgo-ext-text,var(--bgo-text))!important;}',
       'html.bgo-external-theme[data-bgo-theme="dark"] [data-bgo-text-fix="muted"]{color:var(--bgo-ext-muted,var(--bgo-muted))!important;}',
-      'html.bgo-external-theme[data-bgo-theme="dark"] [data-bgo-tool-status]{display:inline-flex!important;align-items:center!important;min-height:18px!important;padding:1px 6px!important;border-radius:5px!important;border:1px solid transparent!important;font-weight:600!important;line-height:1.35!important;}',
+      'html.bgo-external-theme[data-bgo-theme="dark"] [data-bgo-tool-status]{display:inline-flex!important;align-items:center!important;min-height:22px!important;padding:2px 8px!important;border-radius:6px!important;border:1px solid transparent!important;font-size:13px!important;font-weight:700!important;line-height:1.25!important;}',
       'html.bgo-external-theme[data-bgo-theme="dark"] [data-bgo-tool-status="enabled"],html.bgo-external-theme[data-bgo-theme="dark"] [data-bgo-tool-status="installed"]{color:#7ee787!important;background:rgba(52,199,89,.13)!important;border-color:rgba(52,199,89,.32)!important;}',
       'html.bgo-external-theme[data-bgo-theme="dark"] [data-bgo-tool-status="missing"]{color:#d7c48d!important;background:rgba(215,196,141,.14)!important;border-color:rgba(215,196,141,.34)!important;}',
+      'html.bgo-external-theme[data-bgo-theme="dark"] [data-bgo-tool-status="failed"]{color:#ff9aa2!important;background:rgba(255,119,125,.14)!important;border-color:rgba(255,119,125,.34)!important;}',
+      'html.bgo-external-theme[data-bgo-theme="dark"] [data-bgo-tool-status="downloading"]{color:#bfdbfe!important;background:rgba(96,165,250,.15)!important;border-color:rgba(96,165,250,.34)!important;}',
+      'html.bgo-external-theme[data-bgo-theme="dark"] [data-bgo-tool-status="paused"]{color:#d2a8ff!important;background:rgba(210,168,255,.14)!important;border-color:rgba(210,168,255,.32)!important;}',
+      'html.bgo-external-theme[data-bgo-theme="dark"] [data-bgo-tool-status="internal"]{color:#d2a8ff!important;background:rgba(210,168,255,.14)!important;border-color:rgba(210,168,255,.32)!important;}',
       'html.bgo-external-theme[data-bgo-theme="dark"] [data-bgo-tool-status="disabled"]{color:#c7d0da!important;background:rgba(148,163,184,.15)!important;border-color:rgba(148,163,184,.32)!important;}',
       'html.bgo-external-theme[data-bgo-theme="dark"] [data-bgo-tool-status="platform"]{color:#c7d2fe!important;background:rgba(129,140,248,.16)!important;border-color:rgba(129,140,248,.34)!important;}',
       'html.bgo-external-theme[data-bgo-theme="dark"] [data-bgo-tool-status="default-version"],html.bgo-external-theme[data-bgo-theme="dark"] [data-bgo-tool-status="version"]{color:#bfdbfe!important;background:rgba(96,165,250,.15)!important;border-color:rgba(96,165,250,.34)!important;}',
@@ -271,28 +561,143 @@ const externalThemeBridgeHTML = `
   var bgoToolVersionMeta = {};
   var bgoToolVersionMetaLoaded = false;
   var bgoToolVersionMetaLoading = false;
+  var bgoToolVersionMetaLastLoadedAt = 0;
+  var bgoRequiredToolUninstallMessage = '\u8fd9\u662f\u5fc5\u9700 / \u9ed8\u8ba4\u5b89\u88c5\u5de5\u5177\uff0c\u5f55\u5236\u548c\u76f8\u5173\u529f\u80fd\u81f3\u5c11\u9700\u8981\u4fdd\u7559\u4e00\u4e2a\u5df2\u5b89\u88c5\u7248\u672c\uff0c\u4e0d\u80fd\u5378\u8f7d\u6240\u6709\u7248\u672c\u3002\u8bf7\u5148\u5b89\u88c5\u8be5\u5de5\u5177\u7684\u5176\u4ed6\u7248\u672c\uff0c\u786e\u8ba4\u53ef\u7528\u540e\u518d\u5378\u8f7d\u5f53\u524d\u7248\u672c\u3002';
+  var bgoRequiredToolDisableMessage = '\u8fd9\u662f\u5fc5\u9700 / \u9ed8\u8ba4\u5b89\u88c5\u5de5\u5177\uff0c\u5f55\u5236\u548c\u76f8\u5173\u529f\u80fd\u4f9d\u8d56\u5b83\u4fdd\u6301\u542f\u7528\uff0c\u4e0d\u80fd\u505c\u7528\u3002';
+  var bgoToolInfoMap = {
+    'ffmpeg': {
+      role: 'required',
+      roleLabel: '\u5fc5\u9700 / \u9ed8\u8ba4\u5b89\u88c5',
+      title: '\u6838\u5fc3\u5f55\u5236\u7ec4\u4ef6',
+      description: '\u7528\u4e8e\u5f55\u5236\u3001\u5c01\u88c5\u3001\u8f6c\u7801\u3001\u622a\u56fe\u548c\u70e7\u5f55\u5b57\u5e55\u3002\u7f3a\u5931\u65f6 FFmpeg \u5f55\u5236\u3001WebRTC/HLS \u8f6c\u5c01\u88c5\u548c\u591a\u6570\u540e\u5904\u7406\u4f1a\u4e0d\u53ef\u7528\uff0c\u7a0b\u5e8f\u4f1a\u81ea\u52a8\u51c6\u5907\u3002'
+    },
+    'dotnet': {
+      role: 'required',
+      roleLabel: '\u5fc5\u9700 / \u9ed8\u8ba4\u5b89\u88c5',
+      title: '.NET \u8fd0\u884c\u65f6',
+      description: 'BililiveRecorder \u4e0e FLV \u4fee\u590d\u4f9d\u8d56\u7684\u8fd0\u884c\u73af\u5883\u3002\u901a\u5e38\u968f\u9ed8\u8ba4\u5de5\u5177\u4e00\u8d77\u51c6\u5907\uff0c\u4e0d\u9700\u8981\u5355\u72ec\u64cd\u4f5c\u3002'
+    },
+    'bililive-tools': {
+      role: 'required',
+      roleLabel: '\u5fc5\u9700 / \u9ed8\u8ba4\u5b89\u88c5',
+      title: '\u5e73\u53f0\u89e3\u6790\u670d\u52a1',
+      description: '\u90e8\u5206\u5e73\u53f0\u89e3\u6790\u3001\u8f85\u52a9\u80fd\u529b\u548c\u5de5\u5177\u670d\u52a1\u4f9d\u8d56\u5b83\u8fd0\u884c\uff1b\u7531\u7a0b\u5e8f\u81ea\u52a8\u542f\u52a8\u3002\u4f9d\u8d56 Node\u3002'
+    },
+    'node': {
+      role: 'required',
+      roleLabel: '\u5fc5\u9700 / \u9ed8\u8ba4\u5b89\u88c5',
+      title: 'Node \u8fd0\u884c\u65f6',
+      description: 'biliLive-tools \u7684\u8fd0\u884c\u73af\u5883\u3002\u9ed8\u8ba4\u51c6\u5907\uff0c\u901a\u5e38\u4e0d\u9700\u8981\u624b\u52a8\u5207\u6362\u7248\u672c\u3002'
+    },
+    'bililive-scheduler': {
+      role: 'required',
+      roleLabel: '\u5fc5\u9700 / \u9ed8\u8ba4\u5b89\u88c5',
+      title: '\u8c03\u5ea6\u5668\u670d\u52a1',
+      description: '\u7528\u4e8e\u8c03\u5ea6\u5668\u9875\u9762\u3001\u623f\u95f4\u72b6\u6001\u5237\u65b0\u6392\u961f\u548c\u8bf7\u6c42\u8282\u6d41\u3002\u9ed8\u8ba4\u51c6\u5907\u5e76\u7531\u7a0b\u5e8f\u542f\u52a8\u3002'
+    },
+    'bililive-recorder': {
+      role: 'recommended',
+      roleLabel: '\u63a8\u8350\u5b89\u88c5',
+      title: '\u5f55\u64ad\u59ec\u6838\u5fc3\u5e93',
+      description: '\u7528\u4e8e FLV \u4fee\u590d\u7b49\u540e\u5904\u7406\u80fd\u529b\u3002\u9ed8\u8ba4\u4f1a\u5c1d\u8bd5\u51c6\u5907\uff0c\u53ea\u6709\u76f8\u5173\u4fee\u590d\u6d41\u7a0b\u4f1a\u5b9e\u9645\u8c03\u7528\u3002'
+    },
+    'bililive-recorder-cli': {
+      role: 'recommended',
+      roleLabel: '\u63a8\u8350\u5b89\u88c5',
+      title: '\u5f55\u64ad\u59ec\u4e0b\u8f7d\u5668',
+      description: '\u9009\u62e9 BililiveRecorder \u4e0b\u8f7d\u5668\u65f6\u9700\u8981\uff0c\u540c\u65f6\u4f9d\u8d56 dotnet\u3002\u4e0d\u5f00\u542f\u8be5\u4e0b\u8f7d\u5668\u65f6\u4e0d\u662f\u5fc5\u9700\u3002'
+    },
+    'chromium': {
+      role: 'optional',
+      roleLabel: '\u53ef\u9009\u5b89\u88c5',
+      title: '\u6d4f\u89c8\u5668\u5f55\u5236\u4f9d\u8d56',
+      description: '\u4ec5\u5728\u9700\u8981\u6d4f\u89c8\u5668\u5f55\u5236\u3001\u767b\u5f55\u6001\u6293\u53d6\u6216\u9875\u9762\u81ea\u52a8\u5316\u80fd\u529b\u65f6\u5b89\u88c5\u3002\u666e\u901a FFmpeg/\u539f\u751f\u5f55\u5236\u4e0d\u9700\u8981\u3002'
+    },
+    'openlist': {
+      role: 'optional',
+      roleLabel: '\u53ef\u9009\u5b89\u88c5',
+      title: '\u4e91\u76d8\u4e0a\u4f20\u670d\u52a1',
+      description: '\u53ea\u5728\u4f7f\u7528\u5185\u7f6e OpenList \u505a\u4e91\u76d8\u4e0a\u4f20\u65f6\u9700\u8981\u3002\u82e5\u914d\u7f6e\u4e86\u5916\u90e8 OpenList\uff0c\u53ef\u4e0d\u5b89\u88c5\u5185\u90e8\u7248\u672c\u3002'
+    },
+    'klive': {
+      role: 'internal',
+      roleLabel: '\u5185\u90e8\u7ec4\u4ef6',
+      title: '\u8fdc\u7a0b\u8bbf\u95ee\u7ec4\u4ef6',
+      description: '\u7531 BiliLive-go \u81ea\u52a8\u7ba1\u7406\u7684\u8fdc\u7a0b\u8bbf\u95ee/\u96a7\u9053\u80fd\u529b\u3002\u5f53\u524d\u4e0d\u63d0\u4f9b\u53ef\u624b\u52a8\u5b89\u88c5\u7248\u672c\uff0c\u4e0d\u9700\u8981\u5728\u8fd9\u91cc\u5378\u8f7d\u6216\u5207\u6362\u3002'
+    },
+    'bililive-go': {
+      role: 'internal',
+      roleLabel: '\u5185\u90e8\u7ec4\u4ef6',
+      title: '\u7a0b\u5e8f\u66f4\u65b0\u7f13\u5b58',
+      description: '\u8fd9\u662f\u81ea\u52a8\u66f4\u65b0\u7cfb\u7edf\u6ce8\u5165\u7684\u5185\u90e8\u6761\u76ee\uff0c\u4e0d\u4ee3\u8868\u5f53\u524d\u8fd0\u884c\u7248\u672c\u3002\u5df2\u6e05\u7a7a\u65f6\u4f1a\u5728\u68c0\u6d4b\u5230\u65b0\u7248\u672c\u540e\u81ea\u52a8\u751f\u6210\uff0c\u4e0d\u9700\u8981\u624b\u52a8\u5b89\u88c5\u6216\u5378\u8f7d\u3002'
+    }
+  };
+  var bgoToolLegendItems = [
+    { role: 'required', label: '\u5fc5\u9700/\u9ed8\u8ba4', text: '\u5fc5\u9700/\u9ed8\u8ba4\u5b89\u88c5\uff1a\u6838\u5fc3\u5f55\u5236\u6216\u9ed8\u8ba4\u670d\u52a1\u4f1a\u81ea\u52a8\u51c6\u5907\u3002' },
+    { role: 'recommended', label: '\u63a8\u8350', text: '\u63a8\u8350\u5b89\u88c5\uff1a\u5f00\u542f\u5bf9\u5e94\u4e0b\u8f7d\u5668\u3001\u4fee\u590d\u6216\u5e73\u53f0\u80fd\u529b\u65f6\u5efa\u8bae\u51c6\u5907\u3002' },
+    { role: 'optional', label: '\u53ef\u9009', text: '\u53ef\u9009\u5b89\u88c5\uff1a\u53ea\u6709\u542f\u7528\u7279\u5b9a\u529f\u80fd\u65f6\u624d\u9700\u8981\u3002' },
+    { role: 'internal', label: '\u5185\u90e8', text: '\u5185\u90e8\u7ec4\u4ef6\uff1a\u7cfb\u7edf\u7f13\u5b58\u6216\u5185\u90e8\u80fd\u529b\uff0c\u4e0d\u5efa\u8bae\u624b\u52a8\u64cd\u4f5c\u3002' }
+  ];
+  function normalizeToolName(name) {
+    return String(name || '').trim().toLowerCase();
+  }
+  function getToolInfo(groupName) {
+    return bgoToolInfoMap[normalizeToolName(groupName)] || null;
+  }
   function normalizeVersionList(versions) {
     return Array.prototype.slice.call(versions || []).filter(Boolean).sort(compactToolVersionCompare);
+  }
+  function getToolInstallState(tool) {
+    var status = tool && tool.downloadProcess && tool.downloadProcess.status;
+    if (tool && tool.installed) return { key: 'installed', label: '\u5df2\u5b89\u88c5' };
+    if (status === 'failed') return { key: 'failed', label: '\u5b89\u88c5\u5931\u8d25' };
+    if (status === 'downloading' || status === 'trying') return { key: 'downloading', label: '\u5b89\u88c5\u4e2d' };
+    if (status === 'extracting') return { key: 'downloading', label: '\u89e3\u538b\u4e2d' };
+    if (status === 'paused') return { key: 'paused', label: '\u5df2\u6682\u505c' };
+    return { key: 'missing', label: '\u672a\u5b89\u88c5' };
   }
   function rememberToolVersionMeta(groups) {
     var next = {};
     (groups || []).forEach(function (group) {
       if (!group || !group.name || !Array.isArray(group.tools)) return;
       var rawVersions = group.tools.map(function (tool) { return tool && tool.version; }).filter(Boolean);
-      if (rawVersions.length <= 1) return;
+      var versions = normalizeVersionList(rawVersions);
       var enabledTool = group.tools.find(function (tool) { return tool && tool.enabled; });
+      var recommendedVersion = group.defaultVersion || group.recommendedVersion || group.latestVersion || versions[0] || rawVersions[0] || '';
+      var groupEnabled = group.enabled !== false;
+      var currentVersionCandidate = groupEnabled ? (group.pinnedVersion || (enabledTool && enabledTool.version) || '') : '';
+      var byVersion = {};
+      group.tools.forEach(function (tool) {
+        if (!tool || !tool.version) return;
+        var state = getToolInstallState(tool);
+        byVersion[tool.version] = {
+          installed: !!tool.installed,
+          status: state.key,
+          label: state.label,
+          downloadStatus: tool.downloadProcess && tool.downloadProcess.status || ''
+        };
+      });
+      var currentState = currentVersionCandidate && byVersion[currentVersionCandidate];
+      var currentVersion = currentState && currentState.installed ? currentVersionCandidate : '';
       next[group.name] = {
-        versions: normalizeVersionList(rawVersions),
-        pinnedVersion: group.pinnedVersion || '',
-        defaultVersion: group.pinnedVersion || (enabledTool && enabledTool.version) || rawVersions[0] || ''
+        versions: versions,
+        pinnedVersion: currentVersion,
+        currentVersion: currentVersion,
+        requestedPinnedVersion: group.pinnedVersion || '',
+        enabled: groupEnabled,
+        defaultVersion: recommendedVersion,
+        recommendedVersion: recommendedVersion,
+        byVersion: byVersion
       };
     });
     bgoToolVersionMeta = next;
     bgoToolVersionMetaLoaded = true;
+    bgoToolVersionMetaLastLoadedAt = Date.now();
     markToolVersionGroups();
   }
-  function loadToolVersionMeta() {
-    if (bgoToolVersionMetaLoaded || bgoToolVersionMetaLoading) return;
+  function loadToolVersionMeta(force) {
+    if (bgoToolVersionMetaLoading) return;
+    if (!force && bgoToolVersionMetaLoaded && Date.now() - bgoToolVersionMetaLastLoadedAt < 2500) return;
     if (location.pathname.indexOf('/tools') < 0 && location.pathname.indexOf('/remotetools') < 0) return;
     bgoToolVersionMetaLoading = true;
     fetch(new URL('./api/tools', window.location.href).toString())
@@ -310,11 +715,14 @@ const externalThemeBridgeHTML = `
       var groupName = (title.textContent || '').trim();
       var meta = bgoToolVersionMeta[groupName];
       var groupCard = title.closest('.ant-card');
-      if (!groupCard || !meta || !meta.versions || meta.versions.length <= 1) return;
-      groupCard.dataset.bgoHasMultipleVersions = 'true';
+      if (!groupCard || !meta || !meta.versions) return;
       groupCard.dataset.bgoGroupName = groupName;
-      if (!groupCard.dataset.bgoSelectedToolVersion && meta.defaultVersion) {
-        groupCard.dataset.bgoSelectedToolVersion = meta.defaultVersion;
+      groupCard.dataset.bgoToolGroupEmpty = meta.versions.length ? 'false' : 'true';
+      if (meta.versions.length > 1) {
+        groupCard.dataset.bgoHasMultipleVersions = 'true';
+      }
+      if (!groupCard.dataset.bgoSelectedToolVersion) {
+        groupCard.dataset.bgoSelectedToolVersion = meta.currentVersion || meta.defaultVersion || meta.versions[0] || '';
       }
     });
   }
@@ -337,28 +745,357 @@ const externalThemeBridgeHTML = `
     }
     return '';
   }
-  function hideOriginalVersionSections(groupCard) {
+  function isInCompactVersionUI(el) {
+    return !!(el && el.closest && el.closest('.bgo-tool-version-compact,[data-bgo-tool-version-card="true"]'));
+  }
+  function isDefaultVersionLabelText(text) {
+    text = String(text || '').trim();
+    return text.indexOf('\u9ed8\u8ba4\u7248\u672c') === 0 || /^Default\s+Version/i.test(text);
+  }
+  function isCurrentVersionLabelText(text) {
+    text = String(text || '').trim();
+    return text.indexOf('\u5f53\u524d\u7248\u672c') === 0 || /^Current\s+Version/i.test(text);
+  }
+  function findVersionTagInScope(scope) {
+    if (!scope) return null;
+    var tags = Array.prototype.slice.call(scope.querySelectorAll('.ant-tag,[class*="tag"]'));
+    for (var i = 0; i < tags.length; i++) {
+      if (isInCompactVersionUI(tags[i])) continue;
+      if (tags[i].dataset && tags[i].dataset.bgoHiddenRecommendedVersion === 'true') continue;
+      if (tags[i].dataset && tags[i].dataset.bgoToolStatus === 'version') return tags[i];
+      if (isToolVersionText(tags[i].textContent || '')) return tags[i];
+    }
+    return null;
+  }
+  function getVersionState(groupName, version) {
+    var meta = bgoToolVersionMeta[groupName] || {};
+    var state = meta.byVersion && meta.byVersion[version];
+    if (state) return state;
+    return { installed: false, status: 'missing', label: '\u672a\u5b89\u88c5' };
+  }
+  function getCurrentToolVersion(groupName) {
+    var meta = bgoToolVersionMeta[groupName] || {};
+    return meta.currentVersion || meta.pinnedVersion || '';
+  }
+  function getRecommendedToolVersion(groupName) {
+    var meta = bgoToolVersionMeta[groupName] || {};
+    return meta.recommendedVersion || meta.defaultVersion || (meta.versions && meta.versions[0]) || '';
+  }
+  function getCurrentVersionState(groupName) {
+    var version = getCurrentToolVersion(groupName);
+    return version ? getVersionState(groupName, version) : { installed: false, status: 'missing', label: '\u672a\u5b89\u88c5' };
+  }
+  function isTagLike(el) {
+    var className = String(el && el.className || '');
+    return !!(el && (el.classList && el.classList.contains('ant-tag') || className.indexOf('tag') >= 0));
+  }
+  function isInstallStatusText(text) {
+    text = String(text || '').trim();
+    return /^(?:\u5df2\u5b89\u88c5|\u672a\u5b89\u88c5|\u5b89\u88c5\u5931\u8d25|\u5b89\u88c5\u4e2d|\u89e3\u538b\u4e2d|\u5df2\u6682\u505c|\u5df2\u5b8c\u6210|Installed|Not installed|Install failed|Installing|Extracting|Paused)$/i.test(text);
+  }
+  function findStatusNodeAfterVersionTag(tag) {
+    if (!tag || !tag.parentElement) return null;
+    var candidates = Array.prototype.slice.call(tag.parentElement.querySelectorAll('span,div'));
+    for (var i = 0; i < candidates.length; i++) {
+      var node = candidates[i];
+      if (node === tag || node.children.length > 0) continue;
+      if (!(tag.compareDocumentPosition(node) & Node.DOCUMENT_POSITION_FOLLOWING)) continue;
+      if (isInstallStatusText(node.textContent || '')) return node;
+    }
+    return null;
+  }
+  function setToolStatusNode(node, state) {
+    if (!node || !state) return;
+    node.textContent = state.label || '\u672a\u5b89\u88c5';
+    node.dataset.bgoToolStatus = state.status || 'missing';
+    node.style.marginLeft = '8px';
+  }
+  function updateInlineDefaultVersionText(el, version) {
+    if (!el || el.children.length > 0) return false;
+    var text = (el.textContent || '').trim();
+    if (!isDefaultVersionLabelText(text)) return false;
+    var next = text.replace(/((?:\u9ed8\u8ba4\u7248\u672c|Default\s+Version)\s*[:\uff1a]?\s*)(?:[a-z]+-?v?|v)?\d+(?:\.\d+)+(?:[-._a-zA-Z0-9]+)?/i, '$1' + version);
+    if (next === text) return false;
+    el.textContent = next;
+    return true;
+  }
+  function syncDisplayedDefaultVersion(groupCard, groupName) {
+    if (!groupCard || !groupName) return;
+    var currentVersion = getCurrentToolVersion(groupName);
+    var recommendedVersion = getRecommendedToolVersion(groupName);
+    var currentText = currentVersion || '\u65e0';
+    var currentState = getCurrentVersionState(groupName);
+    var enabledText = currentVersion ? '\u5df2\u542f\u7528' : '\u672a\u542f\u7528';
+    var labels = Array.prototype.slice.call(groupCard.querySelectorAll('span,div,label,strong'));
+    for (var i = 0; i < labels.length; i++) {
+      var label = labels[i];
+      if (isInCompactVersionUI(label)) continue;
+      if (label.children.length > 0) continue;
+      var labelText = (label.textContent || '').trim();
+      if (!labelText) continue;
+      if (/^(?:\u5df2\u542f\u7528|\u5df2\u7981\u7528|\u672a\u542f\u7528|Enabled|Disabled)$/i.test(labelText)) {
+        label.textContent = enabledText;
+        label.dataset.bgoToolStatus = currentVersion ? 'enabled' : 'disabled';
+        continue;
+      }
+      if (labelText.indexOf('\u63a8\u8350\u7248\u672c') === 0) {
+        label.textContent = '\u63a8\u8350\u7248\u672c\uff1a' + (recommendedVersion || '\u65e0');
+        label.dataset.bgoToolStatus = 'default-version';
+        continue;
+      }
+      if (isCurrentVersionLabelText(labelText)) {
+        label.textContent = '\u5f53\u524d\u7248\u672c:';
+        var currentScope = label.closest('.ant-space') || label.closest('.ant-row') || label.closest('.ant-descriptions-item') || label.parentElement;
+        var currentTag = findVersionTagInScope(currentScope);
+        var currentCursor = (label.closest('.ant-space-item') || label).nextElementSibling;
+        while (!currentTag && currentCursor) {
+          currentTag = findVersionTagInScope(currentCursor);
+          currentCursor = currentCursor.nextElementSibling;
+        }
+        if (!currentTag) currentTag = findVersionTagInScope(groupCard);
+        if (currentTag) {
+          currentTag.textContent = currentText;
+          currentTag.style.display = '';
+          currentTag.dataset.bgoToolStatus = 'version';
+          var currentStatusNode = findStatusNodeAfterVersionTag(currentTag);
+          if (!currentStatusNode && currentTag.parentNode) {
+            currentStatusNode = document.createElement('span');
+            currentTag.insertAdjacentElement('afterend', currentStatusNode);
+          }
+          setToolStatusNode(currentStatusNode, currentState);
+          return;
+        }
+      }
+      if (!isDefaultVersionLabelText(labelText)) continue;
+      var updated = false;
+      if (isTagLike(label) || labelText === '\u9ed8\u8ba4\u7248\u672c' || /^Default\s+Version$/i.test(labelText)) {
+        label.textContent = '\u63a8\u8350\u7248\u672c\uff1a' + (recommendedVersion || '\u65e0');
+        label.dataset.bgoToolStatus = 'default-version';
+        var recommendedScope = label.closest('.ant-space') || label.closest('.ant-row') || label.parentElement;
+        var recommendedTag = findVersionTagInScope(recommendedScope);
+        if (recommendedTag) {
+          recommendedTag.dataset.bgoHiddenRecommendedVersion = 'true';
+          recommendedTag.style.display = 'none';
+        }
+        continue;
+      }
+      label.textContent = '\u5f53\u524d\u7248\u672c:';
+      var scope = label.closest('.ant-space') || label.closest('.ant-row') || label.closest('.ant-descriptions-item') || label.parentElement;
+      var tag = findVersionTagInScope(scope);
+      var cursor = (label.closest('.ant-space-item') || label).nextElementSibling;
+      while (!tag && cursor) {
+        tag = findVersionTagInScope(cursor);
+        cursor = cursor.nextElementSibling;
+      }
+      if (!tag) tag = findVersionTagInScope(groupCard);
+      if (tag) {
+        tag.textContent = currentText;
+        tag.style.display = '';
+        tag.dataset.bgoToolStatus = 'version';
+        var statusNode = findStatusNodeAfterVersionTag(tag);
+        if (!statusNode && tag.parentNode) {
+          statusNode = document.createElement('span');
+          tag.insertAdjacentElement('afterend', statusNode);
+        }
+        setToolStatusNode(statusNode, currentState);
+        updated = true;
+      }
+      if (updated) return;
+    }
+  }
+  function updateToolVersionMeta(groupName, version) {
+    if (!groupName || !version) return;
+    var meta = bgoToolVersionMeta[groupName] || { versions: [] };
+    meta.pinnedVersion = version;
+    meta.currentVersion = version;
+    meta.enabled = true;
+    bgoToolVersionMeta[groupName] = meta;
+  }
+  function setVersionStateBadge(groupCard, groupName, version) {
+    var badge = groupCard.querySelector(':scope .bgo-tool-version-state');
+    if (!badge) return;
+    var state = version ? getVersionState(groupName, version) : { installed: false, status: 'missing', label: '\u672a\u5b89\u88c5' };
+    setToolStatusNode(badge, state);
+  }
+  function isRequiredToolGroup(groupName) {
+    var info = getToolInfo(groupName);
+    return !!(info && info.role === 'required');
+  }
+  function isInternalToolGroup(groupName) {
+    var info = getToolInfo(groupName);
+    return !!(info && info.role === 'internal');
+  }
+  function isEmptyToolGroup(groupName) {
+    var meta = bgoToolVersionMeta[groupName];
+    return !!(meta && Array.isArray(meta.versions) && meta.versions.length === 0);
+  }
+  function countInstalledToolVersions(groupName) {
+    var meta = bgoToolVersionMeta[groupName] || {};
+    var byVersion = meta.byVersion || {};
+    return Object.keys(byVersion).filter(function (version) {
+      return byVersion[version] && byVersion[version].installed;
+    }).length;
+  }
+  function isToolGroupEnableAvailable(groupName) {
+    var meta = bgoToolVersionMeta[groupName];
+    if (!meta || !Array.isArray(meta.versions)) return true;
+    if (countInstalledToolVersions(groupName) <= 0) return false;
+    var pinned = meta.requestedPinnedVersion || '';
+    if (!pinned) return true;
+    var pinnedState = meta.byVersion && meta.byVersion[pinned];
+    return !!(pinnedState && pinnedState.installed);
+  }
+  function setToolGroupSwitchChecked(sw, checked) {
+    if (!sw) return;
+    sw.setAttribute('aria-checked', checked ? 'true' : 'false');
+    if (sw.dataset && sw.dataset.state) sw.dataset.state = checked ? 'checked' : 'unchecked';
+    if (sw.classList) {
+      sw.classList.toggle('ant-switch-checked', checked);
+      sw.classList.toggle('rc-switch-checked', checked);
+      sw.classList.toggle('checked', checked);
+    }
+    var input = sw.querySelector && sw.querySelector('input[type="checkbox"]');
+    if (input) input.checked = checked;
+  }
+  function getToolGroupSwitches(groupCard) {
+    if (!groupCard) return [];
+    return Array.prototype.slice.call(groupCard.querySelectorAll('button[role="switch"],.ant-switch,.rc-switch,[data-slot="switch"],[class*="SwitchRoot"]')).filter(function (sw) {
+      if (!sw || isInCompactVersionUI(sw)) return false;
+      if (sw.closest && sw.closest('[data-bgo-tool-version-card="true"]')) return false;
+      var ownerCard = sw.closest && sw.closest('.ant-card');
+      return !ownerCard || ownerCard === groupCard || !getCardVersion(ownerCard);
+    });
+  }
+  function syncToolGroupToggleState(groupCard, groupName) {
+    var meta = bgoToolVersionMeta[groupName];
+    if (!groupCard || !meta) return;
+    var available = isToolGroupEnableAvailable(groupName);
+    var required = isRequiredToolGroup(groupName);
+    var checked = required && available ? true : !!(meta.enabled && available);
+    groupCard.dataset.bgoToolToggleBlocked = available ? 'false' : 'true';
+    groupCard.dataset.bgoToolRequiredToggleBlocked = required && available ? 'true' : 'false';
+    getToolGroupSwitches(groupCard).forEach(function (sw) {
+      if (!sw.dataset.bgoOriginalDisabled) {
+        sw.dataset.bgoOriginalDisabled = sw.disabled ? 'true' : 'false';
+      }
+      setToolGroupSwitchChecked(sw, checked);
+      sw.dataset.bgoToolToggleBlocked = available ? 'false' : 'true';
+      sw.dataset.bgoToolRequiredToggleBlocked = required && available ? 'true' : 'false';
+      sw.disabled = !available || sw.dataset.bgoOriginalDisabled === 'true';
+      sw.setAttribute('aria-disabled', !available ? 'true' : 'false');
+      sw.title = !available ? '\u8be5\u5de5\u5177\u7ec4\u6ca1\u6709\u53ef\u542f\u7528\u7684\u5df2\u5b89\u88c5\u7248\u672c\uff0c\u8bf7\u5148\u5b89\u88c5\u4e00\u4e2a\u7248\u672c' : (required ? bgoRequiredToolDisableMessage : '');
+      if (sw.classList) sw.classList.toggle('ant-switch-disabled', !available);
+      sw.style.pointerEvents = !available ? 'none' : '';
+      sw.style.opacity = !available ? '.62' : '';
+    });
+  }
+  function isLastRequiredInstalledVersion(groupName, state) {
+    return !!(state && state.installed && isRequiredToolGroup(groupName) && countInstalledToolVersions(groupName) <= 1);
+  }
+  function syncRequiredToolUninstallNotice(card, button, show) {
+    if (!card) return;
+    var notice = card.querySelector(':scope .bgo-tool-required-uninstall-notice');
+    if (!show) {
+      if (notice) notice.remove();
+      return;
+    }
+    if (!notice) {
+      notice = document.createElement('span');
+      notice.className = 'bgo-tool-required-uninstall-notice';
+      notice.setAttribute('role', 'note');
+    }
+    notice.textContent = bgoRequiredToolUninstallMessage;
+    var anchor = button && (button.closest('.ant-space-item') || button);
+    if (anchor && anchor.parentElement && notice.parentElement !== anchor.parentElement) {
+      anchor.insertAdjacentElement('afterend', notice);
+    } else if (!notice.parentElement) {
+      card.appendChild(notice);
+    }
+  }
+  function syncToolCardActionState(card, groupName, version) {
+    if (!card || !version) return;
+    var state = getVersionState(groupName, version);
+    var keepRequiredVersion = isLastRequiredInstalledVersion(groupName, state);
+    var internalTool = isInternalToolGroup(groupName);
+    card.dataset.bgoToolInstallState = state.status || 'missing';
+    card.dataset.bgoToolRequiredLastInstalled = keepRequiredVersion ? 'true' : 'false';
+    card.dataset.bgoToolInternal = internalTool ? 'true' : 'false';
+    Array.prototype.slice.call(card.querySelectorAll('button')).forEach(function (button) {
+      var text = (button.textContent || '').trim();
+      if (text !== '\u5378\u8f7d' && text !== 'Uninstall') return;
+      button.dataset.bgoToolAction = 'uninstall';
+      if (!button.dataset.bgoOriginalDisabled) {
+        button.dataset.bgoOriginalDisabled = button.disabled ? 'true' : 'false';
+      }
+      var hidden = !state.installed || internalTool;
+      button.style.display = hidden ? 'none' : '';
+      button.setAttribute('aria-hidden', hidden ? 'true' : 'false');
+      button.dataset.bgoToolRequiredLastInstalled = keepRequiredVersion ? 'true' : 'false';
+      button.disabled = hidden ? true : button.dataset.bgoOriginalDisabled === 'true';
+      button.title = keepRequiredVersion ? bgoRequiredToolUninstallMessage : '';
+      syncRequiredToolUninstallNotice(card, button, keepRequiredVersion && !hidden);
+      var item = button.closest('.ant-space-item');
+      if (item) item.style.display = hidden ? 'none' : '';
+    });
+  }
+  function startsWithOriginalVersionSectionText(text) {
+    text = String(text || '').trim();
     var labels = [
       '\u9501\u5b9a\u7248\u672c', '\u5df2\u5b89\u88c5\u7248\u672c', '\u5f85\u4e0b\u8f7d\u7248\u672c',
       '\u4e0b\u8f7d\u4e2d\u7248\u672c', '\u5df2\u6682\u505c\u7248\u672c',
       'Pinned Version', 'Installed Versions', 'Pending Versions', 'Downloading Versions', 'Paused Versions'
     ];
-    Array.prototype.slice.call(groupCard.querySelectorAll('section')).forEach(function (section) {
-      var text = section.textContent || '';
-      for (var i = 0; i < labels.length; i++) {
-        if (text.indexOf(labels[i]) >= 0) {
-          section.dataset.bgoOriginalVersionSection = 'hidden';
-          return;
-        }
+    for (var i = 0; i < labels.length; i++) {
+      if (text.indexOf(labels[i]) === 0) return true;
+    }
+    return false;
+  }
+  function markOriginalVersionElementHidden(el) {
+    if (!el) return;
+    if (el.querySelector && el.querySelector('.ant-card,[data-bgo-tool-version-card="true"],button,.ant-btn')) return;
+    el.dataset.bgoOriginalVersionSection = 'hidden';
+    [el.previousElementSibling, el.nextElementSibling].forEach(function (sibling) {
+      if (!sibling) return;
+      var className = String(sibling.className || '');
+      if (sibling.tagName === 'HR' || className.indexOf('divider') >= 0 || className.indexOf('Divider') >= 0) {
+        sibling.dataset.bgoOriginalVersionDivider = 'hidden';
       }
     });
   }
-  function createToolVersionCompact(groupName, versions, selectedVersion, onChange) {
+  function closestOriginalVersionContainer(node, groupCard) {
+    if (!node || !groupCard || isInCompactVersionUI(node)) return null;
+    if (node.closest && node.closest('.bgo-tool-info,[data-bgo-tool-version-card="true"]')) return null;
+    var container = node.closest('.ant-space-item') ||
+      node.closest('.ant-descriptions-item') ||
+      node.closest('.ant-row') ||
+      node.parentElement;
+    if (container && container.classList && container.classList.contains('ant-card-body')) return null;
+    if (!container || container === groupCard || (container.classList && container.classList.contains('ant-card'))) return null;
+    if (container.querySelector && container.querySelector('.ant-card,[data-bgo-tool-version-card="true"],button,.ant-btn')) return null;
+    return container;
+  }
+  function hideOriginalVersionSections(groupCard) {
+    if (!groupCard) return;
+    Array.prototype.slice.call(groupCard.querySelectorAll('span,div,label,strong,p')).forEach(function (node) {
+      if (!startsWithOriginalVersionSectionText(node.textContent || '')) return;
+      var container = closestOriginalVersionContainer(node, groupCard);
+      if (container) markOriginalVersionElementHidden(container);
+    });
+  }
+  function getToolGroupCardFromControl(control) {
+    var card = control && control.closest ? control.closest('.ant-card') : null;
+    while (card) {
+      if (card.querySelector && card.querySelector(':scope h4')) return card;
+      card = card.parentElement && card.parentElement.closest ? card.parentElement.closest('.ant-card') : null;
+    }
+    return null;
+  }
+  function createToolVersionCompact(groupName, versions, selectedVersion, onChange, onEnable) {
     var box = document.createElement('div');
     box.className = 'bgo-tool-version-compact';
     var label = document.createElement('label');
     label.className = 'bgo-tool-version-label';
-    label.textContent = '\u9ed8\u8ba4\u7248\u672c';
+    label.textContent = '\u53ef\u9009\u7248\u672c';
     var select = document.createElement('select');
     select.className = 'bgo-tool-version-select';
     select.setAttribute('aria-label', groupName + ' version');
@@ -370,22 +1107,182 @@ const externalThemeBridgeHTML = `
     });
     select.value = selectedVersion;
     select.addEventListener('change', function () { onChange(select.value); });
+    var enableButton = document.createElement('button');
+    enableButton.type = 'button';
+    enableButton.className = 'bgo-tool-version-enable';
+    enableButton.textContent = '\u542f\u7528';
+    enableButton.addEventListener('click', function () { onEnable(select.value, enableButton); });
     var hint = document.createElement('span');
     hint.className = 'bgo-tool-version-hint';
-    hint.textContent = '\u5207\u6362\u540e\u4f1a\u7acb\u5373\u4fdd\u5b58\u4e3a\u8be5\u5de5\u5177\u7ec4\u9ed8\u8ba4\u7248\u672c\uff0c\u5b89\u88c5\u6216\u542f\u52a8\u65f6\u4f7f\u7528\u6240\u9009\u7248\u672c';
+    hint.textContent = '\u9009\u62e9\u7248\u672c\u540e\u67e5\u770b\u8be6\u60c5\uff1b\u53ea\u6709\u5df2\u5b89\u88c5\u7248\u672c\u624d\u80fd\u542f\u7528';
     box.appendChild(label);
     box.appendChild(select);
+    box.appendChild(enableButton);
     box.appendChild(hint);
     return box;
   }
   function syncToolPinnedVersion(toolName, version) {
-    if (!toolName || !version) return;
+    if (!toolName || !version) return Promise.reject(new Error('missing tool version'));
     var endpoint = new URL('./api/pin-version', window.location.href).toString();
-    fetch(endpoint, {
+    return fetch(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ toolName: toolName, version: version })
-    }).catch(function () {});
+    }).then(function (resp) {
+      if (!resp.ok) throw new Error('pin-version failed: ' + resp.status);
+      return resp;
+    });
+  }
+  function updateToolVersionEnableButton(groupCard, groupName, selectedVersion) {
+    var button = groupCard && groupCard.querySelector(':scope .bgo-tool-version-enable');
+    if (!button) return;
+    var currentVersion = getCurrentToolVersion(groupName);
+    var selectedState = selectedVersion ? getVersionState(groupName, selectedVersion) : null;
+    var shouldShow = !!selectedVersion && selectedVersion !== currentVersion && !!(selectedState && selectedState.installed);
+    button.style.display = shouldShow ? '' : 'none';
+    button.setAttribute('aria-hidden', shouldShow ? 'false' : 'true');
+    button.title = !selectedVersion || selectedVersion === currentVersion ? '' : (shouldShow ? '\u542f\u7528\u8be5\u5df2\u5b89\u88c5\u7248\u672c' : '\u8bf7\u5148\u5b89\u88c5\u8be5\u7248\u672c\uff0c\u7136\u540e\u518d\u542f\u7528');
+  }
+  function syncToolCurrentVersionCompact(groupCard, groupName) {
+    var currentNode = groupCard && groupCard.querySelector(':scope .bgo-tool-version-current');
+    if (!currentNode) return;
+    var version = getCurrentToolVersion(groupName);
+    currentNode.textContent = '\u5f53\u524d\u7248\u672c: ' + (version || '\u65e0');
+    setVersionStateBadge(groupCard, groupName, version);
+  }
+  function createToolRoleBadge(role, label) {
+    var badge = document.createElement('span');
+    badge.className = 'bgo-tool-role-badge';
+    badge.dataset.bgoToolRole = role;
+    badge.textContent = label;
+    return badge;
+  }
+  function createToolInfoBlock(groupName, info) {
+    var block = document.createElement('div');
+    block.className = 'bgo-tool-info';
+    block.dataset.bgoToolName = groupName;
+    block.dataset.bgoToolRole = info.role;
+    var head = document.createElement('div');
+    head.className = 'bgo-tool-info-head';
+    head.appendChild(createToolRoleBadge(info.role, info.roleLabel));
+    var title = document.createElement('strong');
+    title.className = 'bgo-tool-info-title';
+    title.textContent = info.title;
+    head.appendChild(title);
+    var desc = document.createElement('p');
+    desc.className = 'bgo-tool-info-desc';
+    desc.textContent = info.description;
+    block.appendChild(head);
+    block.appendChild(desc);
+    return block;
+  }
+  function getDirectToolInfoBlock(body) {
+    var children = Array.prototype.slice.call(body ? body.children : []);
+    return children.find(function (child) {
+      return child.classList && child.classList.contains('bgo-tool-info');
+    }) || null;
+  }
+  function getEmptyToolGroupMessage(groupName) {
+    var info = getToolInfo(groupName);
+    if (info && info.role === 'internal') {
+      return '\u8be5\u5185\u90e8\u7ec4\u4ef6\u5f53\u524d\u6ca1\u6709\u53ef\u624b\u52a8\u5b89\u88c5\u7248\u672c\uff0c\u7531 BiliLive-go \u81ea\u52a8\u7ba1\u7406\uff0c\u4e0d\u9700\u8981\u5728\u8fd9\u91cc\u5b89\u88c5\u3001\u5378\u8f7d\u6216\u5207\u6362\u3002';
+    }
+    return '\u8be5\u5de5\u5177\u7ec4\u5f53\u524d\u6ca1\u6709\u53ef\u5b89\u88c5\u7248\u672c\u3002\u5982\u679c\u8fd9\u662f\u672c\u5730\u72b6\u6001\u5f02\u5e38\uff0c\u8bf7\u91cd\u542f\u7a0b\u5e8f\u8ba9 RemoteTools \u91cd\u65b0\u52a0\u8f7d\u914d\u7f6e\u3002';
+  }
+  function syncEmptyToolGroupNotice(groupCard, groupName) {
+    if (!groupCard || !groupName) return;
+    var empty = isEmptyToolGroup(groupName);
+    var notice = groupCard.querySelector(':scope .bgo-tool-empty-notice');
+    if (!empty) {
+      groupCard.dataset.bgoToolGroupEmpty = 'false';
+      if (notice) notice.remove();
+      return;
+    }
+    groupCard.dataset.bgoToolGroupEmpty = 'true';
+    if (!notice) {
+      notice = document.createElement('div');
+      notice.className = 'bgo-tool-empty-notice';
+      notice.setAttribute('role', 'note');
+    }
+    notice.textContent = getEmptyToolGroupMessage(groupName);
+    var body = Array.prototype.slice.call(groupCard.children).find(function (child) {
+      return child.classList && child.classList.contains('ant-card-body');
+    }) || groupCard.querySelector('.ant-card-body') || groupCard;
+    var infoBlock = getDirectToolInfoBlock(body);
+    if (infoBlock && notice.parentElement !== body) {
+      infoBlock.insertAdjacentElement('afterend', notice);
+    } else if (!notice.parentElement) {
+      body.insertBefore(notice, body.firstChild);
+    }
+    Array.prototype.slice.call(groupCard.querySelectorAll('span,div,p')).forEach(function (node) {
+      if (!node || node === notice || notice.contains(node) || node.children.length > 0) return;
+      if (node.closest && node.closest('.bgo-tool-info,.bgo-tool-empty-notice')) return;
+      var text = (node.textContent || '').trim();
+      if (text === '\u8be5\u5de5\u5177\u7ec4\u6682\u65e0\u5de5\u5177' || text === 'No tools in this group') {
+        node.dataset.bgoToolStatus = 'empty';
+        node.style.display = 'none';
+      } else if (isInternalToolGroup(groupName) && /^(?:\u5df2\u542f\u7528|\u672a\u542f\u7528|\u5df2\u7981\u7528|Enabled|Disabled)$/i.test(text)) {
+        node.textContent = '\u5185\u90e8\u7ba1\u7406';
+        node.dataset.bgoToolStatus = 'internal';
+      }
+    });
+  }
+  function refreshExternalToolLegend() {
+    if (location.pathname.indexOf('/tools') < 0 && location.pathname.indexOf('/remotetools') < 0) return;
+    if (document.querySelector('.bgo-tool-legend')) return;
+    var title = document.querySelector('h1');
+    if (!title) return;
+    var legend = document.createElement('div');
+    legend.className = 'bgo-tool-legend';
+    bgoToolLegendItems.forEach(function (item) {
+      var entry = document.createElement('div');
+      entry.className = 'bgo-tool-legend-item';
+      entry.dataset.bgoToolRole = item.role;
+      entry.appendChild(createToolRoleBadge(item.role, item.label));
+      var text = document.createElement('span');
+      text.textContent = item.text;
+      entry.appendChild(text);
+      legend.appendChild(entry);
+    });
+    var anchor = title.parentElement || title;
+    var parent = anchor.parentElement;
+    if (parent) {
+      parent.insertBefore(legend, anchor.nextSibling);
+    }
+  }
+  function refreshExternalToolInfo() {
+    if (location.pathname.indexOf('/tools') < 0 && location.pathname.indexOf('/remotetools') < 0) return;
+    Array.prototype.slice.call(document.querySelectorAll('h4')).forEach(function (title) {
+      var groupName = (title.textContent || '').trim();
+      var info = getToolInfo(groupName);
+      if (!info) return;
+      var groupCard = title.closest('.ant-card');
+      if (!groupCard) return;
+      groupCard.dataset.bgoToolRole = info.role;
+      groupCard.dataset.bgoToolName = normalizeToolName(groupName);
+      var body = Array.prototype.slice.call(groupCard.children).find(function (child) {
+        return child.classList && child.classList.contains('ant-card-body');
+      }) || groupCard.querySelector('.ant-card-body') || groupCard;
+      var existing = getDirectToolInfoBlock(body);
+      if (!existing) {
+        existing = createToolInfoBlock(groupName, info);
+        body.insertBefore(existing, body.firstChild);
+        syncEmptyToolGroupNotice(groupCard, groupName);
+        return;
+      }
+      existing.dataset.bgoToolName = groupName;
+      existing.dataset.bgoToolRole = info.role;
+      var badge = existing.querySelector('.bgo-tool-role-badge');
+      if (badge) {
+        badge.dataset.bgoToolRole = info.role;
+        badge.textContent = info.roleLabel;
+      }
+      var infoTitle = existing.querySelector('.bgo-tool-info-title');
+      if (infoTitle) infoTitle.textContent = info.title;
+      var desc = existing.querySelector('.bgo-tool-info-desc');
+      if (desc) desc.textContent = info.description;
+      syncEmptyToolGroupNotice(groupCard, groupName);
+    });
   }
   function refreshExternalToolVersionPicker() {
     if (location.pathname.indexOf('/tools') < 0 && location.pathname.indexOf('/remotetools') < 0) return;
@@ -397,13 +1294,26 @@ const externalThemeBridgeHTML = `
       var groupCard = title.closest('.ant-card');
       if (!groupCard || groupCard.dataset.bgoVersionPickerBusy === '1') return;
       var meta = bgoToolVersionMeta[groupName];
+      hideOriginalVersionSections(groupCard);
+      if (meta) {
+        syncToolGroupToggleState(groupCard, groupName);
+      }
+      if (meta && meta.versions && meta.versions.length) {
+        if (meta.versions.length > 1) {
+          groupCard.dataset.bgoHasMultipleVersions = 'true';
+        }
+        groupCard.dataset.bgoVersionSummaryReady = 'true';
+        if (!groupCard.dataset.bgoSelectedToolVersion) {
+          groupCard.dataset.bgoSelectedToolVersion = getCurrentToolVersion(groupName) || getRecommendedToolVersion(groupName) || meta.versions[0] || '';
+        }
+        syncDisplayedDefaultVersion(groupCard, groupName);
+      }
       var cards = Array.prototype.slice.call(groupCard.querySelectorAll('.ant-card')).filter(function (card) {
         return card !== groupCard && getCardVersion(card);
       });
       if (cards.length <= 1) {
         if (meta && meta.versions && meta.versions.length > 1) {
-          groupCard.dataset.bgoHasMultipleVersions = 'true';
-          groupCard.dataset.bgoVersionPickerReady = 'false';
+          groupCard.dataset.bgoVersionPickerReady = 'true';
         }
         return;
       }
@@ -421,7 +1331,7 @@ const externalThemeBridgeHTML = `
         if (!versions.length) versions = Object.keys(versionToCard).sort(compactToolVersionCompare);
         if (!versions.length) return;
         hideOriginalVersionSections(groupCard);
-        var selectedVersion = groupCard.dataset.bgoSelectedToolVersion || getPinnedVersionFromGroup(groupCard) || (meta && (meta.pinnedVersion || meta.defaultVersion)) || versions[0];
+        var selectedVersion = groupCard.dataset.bgoSelectedToolVersion || getCurrentToolVersion(groupName) || getPinnedVersionFromGroup(groupCard) || getRecommendedToolVersion(groupName) || versions[0];
         if (versions.indexOf(selectedVersion) < 0) selectedVersion = versions[0];
         groupCard.dataset.bgoSelectedToolVersion = selectedVersion;
         var firstWrapper = getCardWrapper(versionToCard[versions[versions.length - 1]] || versionToCard[versions[0]]);
@@ -432,24 +1342,63 @@ const externalThemeBridgeHTML = `
           groupCard.dataset.bgoSelectedToolVersion = version;
           cards.forEach(function (card) {
             var wrapper = getCardWrapper(card);
+            syncToolCardActionState(card, groupName, card.dataset.bgoToolVersion);
             wrapper.dataset.bgoToolVersionWrapper = 'true';
             wrapper.dataset.bgoToolVersionVisible = card.dataset.bgoToolVersion === version ? 'true' : 'false';
             wrapper.style.display = card.dataset.bgoToolVersion === version ? '' : 'none';
           });
           var current = groupCard.querySelector(':scope .bgo-tool-version-current');
-          if (current) current.textContent = version;
-          if (shouldSync) syncToolPinnedVersion(groupName, version);
+          var activeSelect = groupCard.querySelector(':scope .bgo-tool-version-select');
+          if (activeSelect && activeSelect.value !== version) activeSelect.value = version;
+          syncDisplayedDefaultVersion(groupCard, groupName);
+          syncToolCurrentVersionCompact(groupCard, groupName);
+          updateToolVersionEnableButton(groupCard, groupName, version);
+        };
+        var enableSelection = function (version, button) {
+          if (versions.indexOf(version) < 0) return;
+          var selectedState = getVersionState(groupName, version);
+          if (!selectedState || !selectedState.installed) {
+            updateToolVersionEnableButton(groupCard, groupName, version);
+            return;
+          }
+          if (button) {
+            button.disabled = true;
+            button.dataset.bgoLoading = 'true';
+            button.textContent = '\u542f\u7528\u4e2d';
+          }
+          syncToolPinnedVersion(groupName, version).then(function () {
+            updateToolVersionMeta(groupName, version);
+            syncDisplayedDefaultVersion(groupCard, groupName);
+            syncToolCurrentVersionCompact(groupCard, groupName);
+            updateToolVersionEnableButton(groupCard, groupName, version);
+            loadToolVersionMeta(true);
+          }).catch(function () {
+            if (button) button.dataset.bgoError = 'true';
+          }).finally(function () {
+            if (button) {
+              button.disabled = false;
+              button.dataset.bgoLoading = 'false';
+              button.textContent = '\u542f\u7528';
+            }
+          });
         };
         if (!compact) {
           compact = createToolVersionCompact(groupName, versions, selectedVersion, function (version) {
-            applySelection(version, true);
-          });
+            applySelection(version, false);
+          }, enableSelection);
           var current = document.createElement('span');
           current.className = 'bgo-tool-version-current';
-          current.textContent = selectedVersion;
+          current.textContent = '\u5f53\u524d\u7248\u672c: ' + (getCurrentToolVersion(groupName) || '\u65e0');
           compact.appendChild(current);
+          var stateBadge = document.createElement('span');
+          stateBadge.className = 'bgo-tool-version-state';
+          compact.appendChild(stateBadge);
           container.insertBefore(compact, firstWrapper);
         } else {
+          var existingLabel = compact.querySelector('.bgo-tool-version-label');
+          if (existingLabel) existingLabel.textContent = '\u53ef\u9009\u7248\u672c';
+          var existingHint = compact.querySelector('.bgo-tool-version-hint');
+          if (existingHint) existingHint.textContent = '\u9009\u62e9\u7248\u672c\u540e\u67e5\u770b\u8be6\u60c5\uff1b\u53ea\u6709\u5df2\u5b89\u88c5\u7248\u672c\u624d\u80fd\u542f\u7528';
           var select = compact.querySelector('select');
           var oldOptions = Array.prototype.slice.call(select ? select.options : []).map(function (option) { return option.value; }).join('|');
           if (select && oldOptions !== versions.join('|')) {
@@ -462,6 +1411,23 @@ const externalThemeBridgeHTML = `
             });
           }
           if (select) select.value = selectedVersion;
+          if (!compact.querySelector('.bgo-tool-version-state')) {
+            var existingStateBadge = document.createElement('span');
+            existingStateBadge.className = 'bgo-tool-version-state';
+            compact.appendChild(existingStateBadge);
+          }
+          if (!compact.querySelector('.bgo-tool-version-enable')) {
+            var enableButton = document.createElement('button');
+            enableButton.type = 'button';
+            enableButton.className = 'bgo-tool-version-enable';
+            enableButton.textContent = '\u542f\u7528';
+            enableButton.addEventListener('click', function () {
+              var activeSelect = groupCard.querySelector(':scope .bgo-tool-version-select');
+              enableSelection(activeSelect ? activeSelect.value : selectedVersion, enableButton);
+            });
+            var hint = compact.querySelector('.bgo-tool-version-hint');
+            compact.insertBefore(enableButton, hint || null);
+          }
         }
         applySelection(selectedVersion, false);
         groupCard.dataset.bgoVersionPickerReady = 'true';
@@ -500,6 +1466,18 @@ const externalThemeBridgeHTML = `
         el.dataset.bgoToolStatus = 'missing';
         return;
       }
+      if (text === '安装失败') {
+        el.dataset.bgoToolStatus = 'failed';
+        return;
+      }
+      if (text === '安装中' || text === '解压中') {
+        el.dataset.bgoToolStatus = 'downloading';
+        return;
+      }
+      if (text === '已暂停') {
+        el.dataset.bgoToolStatus = 'paused';
+        return;
+      }
       if (text === '该工具组暂无工具') {
         el.dataset.bgoToolStatus = 'empty';
         return;
@@ -514,9 +1492,12 @@ const externalThemeBridgeHTML = `
     });
   }
   var bgoExternalRefreshTimer = 0;
+  var bgoExternalRefreshFrame = 0;
   function runExternalThemeRefresh() {
     installLateSwitchStyle();
+    refreshExternalToolLegend();
     refreshExternalTextHints();
+    refreshExternalToolInfo();
     refreshExternalToolVersionPicker();
   }
   function scheduleExternalThemeRefresh(delay) {
@@ -526,13 +1507,61 @@ const externalThemeBridgeHTML = `
       runExternalThemeRefresh();
     }, delay == null ? 120 : delay);
   }
+  function requestExternalThemeFrameRefresh() {
+    if (bgoExternalRefreshFrame) return;
+    if (!window.requestAnimationFrame) {
+      scheduleExternalThemeRefresh(0);
+      return;
+    }
+    bgoExternalRefreshFrame = window.requestAnimationFrame(function () {
+      bgoExternalRefreshFrame = 0;
+      runExternalThemeRefresh();
+    });
+  }
+  function markToolVersionPreparingFromButton(button) {
+    var groupCard = getToolGroupCardFromControl(button);
+    if (!groupCard) return;
+    groupCard.dataset.bgoVersionPreparing = 'true';
+    hideOriginalVersionSections(groupCard);
+    requestExternalThemeFrameRefresh();
+    window.setTimeout(function () {
+      hideOriginalVersionSections(groupCard);
+      runExternalThemeRefresh();
+    }, 40);
+    window.setTimeout(function () {
+      hideOriginalVersionSections(groupCard);
+      runExternalThemeRefresh();
+    }, 140);
+    window.setTimeout(function () {
+      hideOriginalVersionSections(groupCard);
+      groupCard.dataset.bgoVersionPreparing = 'false';
+    }, 700);
+  }
   runExternalThemeRefresh();
   window.addEventListener('click', function (event) {
-    var target = event.target && event.target.closest ? event.target.closest('button,.ant-btn,[role="button"]') : null;
+    var target = event.target && event.target.closest ? event.target.closest('button,.ant-btn,[role="button"],[role="switch"],.ant-switch,.rc-switch') : null;
     if (!target) return;
+    if (target.dataset && target.dataset.bgoToolToggleBlocked === 'true') {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      return;
+    }
+    if (target.dataset && target.dataset.bgoToolRequiredToggleBlocked === 'true') {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      setToolGroupSwitchChecked(target, true);
+      window.alert(bgoRequiredToolDisableMessage);
+      return;
+    }
+    if (target.dataset && target.dataset.bgoToolRequiredLastInstalled === 'true') {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      window.alert(bgoRequiredToolUninstallMessage);
+      return;
+    }
     var text = (target.textContent || '').trim();
     if (text.indexOf('\u5c55\u5f00\u8be6\u60c5') >= 0 || text.indexOf('View details') >= 0 || text.indexOf('\u6536\u8d77\u8be6\u60c5') >= 0 || text.indexOf('Hide details') >= 0) {
-      scheduleExternalThemeRefresh(220);
+      markToolVersionPreparingFromButton(target);
     }
   }, true);
   window.addEventListener('load', function () {
@@ -541,7 +1570,8 @@ const externalThemeBridgeHTML = `
     setTimeout(runExternalThemeRefresh, 1200);
     if (window.MutationObserver) {
       var observer = new MutationObserver(function () {
-        scheduleExternalThemeRefresh(180);
+        requestExternalThemeFrameRefresh();
+        scheduleExternalThemeRefresh(80);
       });
       observer.observe(document.body, { childList: true, subtree: true });
     }
@@ -761,7 +1791,7 @@ html.bgo-external-theme [aria-selected="true"] {
 html.bgo-external-theme [data-bgo-original-version-section="hidden"] {
   display: none !important;
 }
-html.bgo-external-theme .ant-card[data-bgo-has-multiple-versions="true"]:not([data-bgo-version-picker-ready="true"]) .ant-card {
+html.bgo-external-theme [data-bgo-original-version-divider="hidden"] {
   display: none !important;
 }
 html.bgo-external-theme [data-bgo-tool-version-wrapper="true"][data-bgo-tool-version-visible="false"] {
@@ -799,6 +1829,36 @@ html.bgo-external-theme .bgo-tool-version-select:focus {
   border-color: var(--bgo-accent) !important;
   box-shadow: 0 0 0 2px var(--bgo-accent-soft) !important;
 }
+html.bgo-external-theme .bgo-tool-version-enable {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  min-width: 58px !important;
+  height: 30px !important;
+  padding: 0 12px !important;
+  border: 1px solid rgba(38, 170, 85, .75) !important;
+  border-radius: 7px !important;
+  color: #062814 !important;
+  background: linear-gradient(180deg, #7ee787, #30d158) !important;
+  box-shadow: 0 6px 14px rgba(0, 0, 0, .14) !important;
+  font-size: 12px !important;
+  font-weight: 800 !important;
+  cursor: pointer !important;
+  transition: transform .16s ease, opacity .16s ease, box-shadow .16s ease !important;
+  text-shadow: none !important;
+}
+html.bgo-external-theme .bgo-tool-version-enable:hover {
+  transform: translateY(-1px) !important;
+  box-shadow: 0 8px 18px rgba(0, 0, 0, .18) !important;
+}
+html.bgo-external-theme .bgo-tool-version-enable:disabled {
+  opacity: .62 !important;
+  cursor: not-allowed !important;
+  transform: none !important;
+}
+html.bgo-external-theme .bgo-tool-version-enable[aria-hidden="true"] {
+  display: none !important;
+}
 html.bgo-external-theme .bgo-tool-version-hint {
   color: var(--bgo-ext-muted, var(--bgo-muted)) !important;
   font-size: 12px !important;
@@ -813,6 +1873,129 @@ html.bgo-external-theme .bgo-tool-version-current {
   color: #bfdbfe !important;
   background: rgba(96, 165, 250, .15) !important;
   font-weight: 700 !important;
+}
+html.bgo-external-theme .bgo-tool-version-state {
+  display: inline-flex !important;
+  align-items: center !important;
+  min-height: 20px !important;
+  padding: 1px 7px !important;
+  border-radius: 6px !important;
+  border: 1px solid transparent !important;
+  font-weight: 700 !important;
+}
+html.bgo-external-theme .bgo-tool-required-uninstall-notice {
+  display: inline-flex !important;
+  align-items: center !important;
+  max-width: min(100%, 680px) !important;
+  min-height: 24px !important;
+  margin-left: 8px !important;
+  padding: 3px 8px !important;
+  border-radius: 6px !important;
+  border: 1px solid rgba(246, 193, 119, .34) !important;
+  color: #b7791f !important;
+  background: rgba(246, 193, 119, .13) !important;
+  font-size: 12px !important;
+  font-weight: 600 !important;
+  line-height: 1.45 !important;
+}
+html.bgo-external-theme[data-bgo-theme="dark"] .bgo-tool-required-uninstall-notice {
+  color: #f6c177 !important;
+  background: rgba(246, 193, 119, .15) !important;
+  border-color: rgba(246, 193, 119, .34) !important;
+}
+html.bgo-external-theme .bgo-tool-empty-notice {
+  display: flex !important;
+  align-items: flex-start !important;
+  max-width: min(100%, 760px) !important;
+  margin: 0 0 12px !important;
+  padding: 9px 11px !important;
+  border-radius: 8px !important;
+  border: 1px solid rgba(148, 163, 184, .28) !important;
+  color: var(--bgo-ext-muted, var(--bgo-muted)) !important;
+  background: color-mix(in srgb, var(--bgo-ext-elevated-bg, var(--bgo-elevated-bg)) 80%, transparent) !important;
+  font-size: 12px !important;
+  font-weight: 600 !important;
+  line-height: 1.55 !important;
+}
+html.bgo-external-theme[data-bgo-theme="dark"] .bgo-tool-empty-notice {
+  color: #c7d0da !important;
+  background: rgba(148, 163, 184, .10) !important;
+  border-color: rgba(148, 163, 184, .24) !important;
+}
+html.bgo-external-theme .bgo-tool-legend {
+  display: grid !important;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)) !important;
+  gap: 8px !important;
+  margin: 12px 0 18px !important;
+  padding: 12px !important;
+  border: 1px solid var(--bgo-ext-border, var(--bgo-border)) !important;
+  border-radius: 8px !important;
+  background: color-mix(in srgb, var(--bgo-ext-elevated-bg, var(--bgo-elevated-bg)) 70%, transparent) !important;
+}
+html.bgo-external-theme .bgo-tool-legend-item {
+  display: flex !important;
+  align-items: flex-start !important;
+  gap: 8px !important;
+  color: var(--bgo-ext-muted, var(--bgo-muted)) !important;
+  font-size: 12px !important;
+  line-height: 1.55 !important;
+}
+html.bgo-external-theme .bgo-tool-info {
+  margin: 0 0 12px !important;
+  padding: 10px 12px !important;
+  border: 1px solid var(--bgo-ext-border, var(--bgo-border)) !important;
+  border-radius: 8px !important;
+  background: color-mix(in srgb, var(--bgo-ext-elevated-bg, var(--bgo-elevated-bg)) 72%, var(--bgo-ext-panel-bg, var(--bgo-panel-bg))) !important;
+}
+html.bgo-external-theme .bgo-tool-info-head {
+  display: flex !important;
+  align-items: center !important;
+  gap: 8px !important;
+  flex-wrap: wrap !important;
+  margin-bottom: 6px !important;
+}
+html.bgo-external-theme .bgo-tool-info-title {
+  color: var(--bgo-ext-text, var(--bgo-text)) !important;
+  font-size: 13px !important;
+  line-height: 1.35 !important;
+}
+html.bgo-external-theme .bgo-tool-info-desc {
+  margin: 0 !important;
+  color: var(--bgo-ext-muted, var(--bgo-muted)) !important;
+  font-size: 12px !important;
+  line-height: 1.55 !important;
+}
+html.bgo-external-theme .bgo-tool-role-badge {
+  display: inline-flex !important;
+  align-items: center !important;
+  min-height: 20px !important;
+  padding: 2px 7px !important;
+  border-radius: 6px !important;
+  border: 1px solid transparent !important;
+  font-size: 12px !important;
+  font-weight: 700 !important;
+  line-height: 1.25 !important;
+  white-space: nowrap !important;
+}
+html.bgo-external-theme .bgo-tool-role-badge[data-bgo-tool-role="required"] {
+  color: #7ee787 !important;
+  background: rgba(52, 199, 89, .14) !important;
+  border-color: rgba(52, 199, 89, .34) !important;
+}
+html.bgo-external-theme .bgo-tool-role-badge[data-bgo-tool-role="recommended"] {
+  color: #f6c177 !important;
+  background: rgba(246, 193, 119, .15) !important;
+  border-color: rgba(246, 193, 119, .34) !important;
+}
+html.bgo-external-theme .bgo-tool-role-badge[data-bgo-tool-role="optional"] {
+  color: #bfdbfe !important;
+  background: rgba(96, 165, 250, .15) !important;
+  border-color: rgba(96, 165, 250, .34) !important;
+}
+html.bgo-external-theme .bgo-tool-role-badge[data-bgo-tool-role="internal"] {
+  color: #d2a8ff !important;
+  background: rgba(210, 168, 255, .14) !important;
+  border-color: rgba(210, 168, 255, .32) !important;
 }
 html.bgo-external-theme[data-bgo-theme="dark"] :where(
   h1,
@@ -842,15 +2025,28 @@ html.bgo-external-theme[data-bgo-theme="dark"] :where(
 html.bgo-external-theme[data-bgo-theme="dark"] [data-bgo-text-fix="muted"] {
   color: var(--bgo-ext-muted, var(--bgo-muted)) !important;
 }
+html.bgo-external-theme [data-bgo-tool-status] {
+  display: inline-flex !important;
+  align-items: center !important;
+  min-height: 22px !important;
+  padding: 2px 8px !important;
+  border-radius: 6px !important;
+  font-size: 13px !important;
+  font-weight: 700 !important;
+  line-height: 1.25 !important;
+  word-break: keep-all !important;
+  white-space: nowrap !important;
+}
 html.bgo-external-theme[data-bgo-theme="dark"] [data-bgo-tool-status] {
   display: inline-flex !important;
   align-items: center !important;
-  min-height: 18px !important;
-  padding: 1px 6px !important;
-  border-radius: 5px !important;
+  min-height: 22px !important;
+  padding: 2px 8px !important;
+  border-radius: 6px !important;
   border: 1px solid transparent !important;
-  font-weight: 600 !important;
-  line-height: 1.35 !important;
+  font-size: 13px !important;
+  font-weight: 700 !important;
+  line-height: 1.25 !important;
 }
 html.bgo-external-theme[data-bgo-theme="dark"] [data-bgo-tool-status="enabled"],
 html.bgo-external-theme[data-bgo-theme="dark"] [data-bgo-tool-status="installed"] {
@@ -862,6 +2058,26 @@ html.bgo-external-theme[data-bgo-theme="dark"] [data-bgo-tool-status="missing"] 
   color: #d7c48d !important;
   background: rgba(215, 196, 141, .14) !important;
   border-color: rgba(215, 196, 141, .34) !important;
+}
+html.bgo-external-theme[data-bgo-theme="dark"] [data-bgo-tool-status="failed"] {
+  color: #ff9aa2 !important;
+  background: rgba(255, 119, 125, .14) !important;
+  border-color: rgba(255, 119, 125, .34) !important;
+}
+html.bgo-external-theme[data-bgo-theme="dark"] [data-bgo-tool-status="downloading"] {
+  color: #bfdbfe !important;
+  background: rgba(96, 165, 250, .15) !important;
+  border-color: rgba(96, 165, 250, .34) !important;
+}
+html.bgo-external-theme[data-bgo-theme="dark"] [data-bgo-tool-status="paused"] {
+  color: #d2a8ff !important;
+  background: rgba(210, 168, 255, .14) !important;
+  border-color: rgba(210, 168, 255, .32) !important;
+}
+html.bgo-external-theme[data-bgo-theme="dark"] [data-bgo-tool-status="internal"] {
+  color: #d2a8ff !important;
+  background: rgba(210, 168, 255, .14) !important;
+  border-color: rgba(210, 168, 255, .32) !important;
 }
 html.bgo-external-theme[data-bgo-theme="dark"] [data-bgo-tool-status="disabled"] {
   color: #c7d0da !important;

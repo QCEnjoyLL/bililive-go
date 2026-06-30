@@ -207,13 +207,13 @@ const CloudUploadSettings: React.FC<CloudUploadSettingsProps> = ({ config }) => 
       </ConfigField>
       <ConfigField
         label="上传时机"
-        description="选择何时开始上传：立即上传原始文件，或等待后处理（修复/转码）完成后上传"
+        description="选择何时开始上传：录制结束后立即上传原始文件，或等待修复、转码等处理流程结束后上传"
       >
         <Form.Item name={['on_record_finished', 'upload_timing']} noStyle>
           <Select style={{ width: 250 }} placeholder="选择上传时机">
             <Select.Option value="">使用默认（立即）</Select.Option>
             <Select.Option value="immediate">立即上传原始文件</Select.Option>
-            <Select.Option value="after_process">后处理完成后上传</Select.Option>
+            <Select.Option value="after_process">处理流程结束后上传</Select.Option>
           </Select>
         </Form.Item>
       </ConfigField>

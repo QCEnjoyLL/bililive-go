@@ -219,11 +219,12 @@ func initMux(ctx context.Context) *mux.Router {
 				}
 				lastPort = port
 				target, _ := url.Parse("http://localhost:" + strconv.Itoa(port))
-				proxy := newExternalThemeReverseProxy(target)
+				reverseProxy := newExternalThemeReverseProxy(target)
 				// 可选：当下游未就绪时给出明确错误
-				proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
+				reverseProxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
 					http.Error(w, "无法连接到 Tools Web UI: "+err.Error(), http.StatusBadGateway)
 				}
+				proxy := guardProtectedToolUninstall(target, reverseProxy)
 				// 热切换为新的 proxy（保持与初始 Store 相同的具体类型）
 				dyn.h.Store(handlerHolder{H: http.Handler(proxy)})
 			}

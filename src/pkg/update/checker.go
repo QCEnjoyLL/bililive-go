@@ -382,7 +382,25 @@ func (c *Checker) isNewerVersion(tagName string) (bool, error) {
 		return false, fmt.Errorf("解析新版本失败: %w", err)
 	}
 
+	if isDevBuildVersion(c.currentVersion) && sameCoreVersion(current, latest) {
+		return false, nil
+	}
+
 	return latest.GreaterThan(current), nil
+}
+
+func isDevBuildVersion(version string) bool {
+	normalized := strings.TrimPrefix(strings.TrimSpace(version), "v")
+	ver, err := semver.NewVersion(normalized)
+	if err != nil {
+		return strings.HasSuffix(strings.ToLower(normalized), "-dev")
+	}
+	pre := strings.ToLower(ver.Prerelease())
+	return pre == "dev" || strings.HasPrefix(pre, "dev.") || strings.Contains(pre, ".dev.")
+}
+
+func sameCoreVersion(a, b *semver.Version) bool {
+	return a.Major() == b.Major() && a.Minor() == b.Minor() && a.Patch() == b.Patch()
 }
 
 // getExpectedAssetName 获取当前平台期望的资源名称
@@ -483,6 +501,11 @@ func (c *Checker) CheckForUpdateViaBililiveGoCom(includePrerelease bool) (*Relea
 
 	// 如果没有可用更新，返回 nil
 	if !response.UpdateAvailable {
+		return nil, nil
+	}
+
+	isNewer, err := c.isNewerVersion(response.LatestVersion)
+	if err == nil && !isNewer {
 		return nil, nil
 	}
 
