@@ -18,6 +18,7 @@ import (
 	"github.com/bililive-go/bililive-go/src/instance"
 	applog "github.com/bililive-go/bililive-go/src/log"
 	"github.com/bililive-go/bililive-go/src/pipeline"
+	"github.com/bililive-go/bililive-go/src/pkg/internalapi"
 	bilisentry "github.com/bililive-go/bililive-go/src/pkg/sentry"
 	"github.com/bililive-go/bililive-go/src/recorders"
 	"github.com/bililive-go/bililive-go/src/tools"
@@ -65,6 +66,7 @@ func initMux(ctx context.Context) *mux.Router {
 			)
 		})
 	} /* , log */)
+	m.Use(schedulerInternalAPIMiddleware)
 	m.Use(webAuthMiddleware(configs.GetCurrentConfig().RPC.Auth))
 
 	// api router
@@ -157,6 +159,8 @@ func initMux(ctx context.Context) *mux.Router {
 
 	// OSRP 开放直播录制协议路由
 	RegisterOSRPRoutes(m, inst)
+
+	m.PathPrefix(internalapi.SchedulerPathPrefix() + apiRouterPrefix).Handler(schedulerInternalAPIProxy(m))
 
 	m.PathPrefix("/files/").Handler(
 		CORSMiddleware(

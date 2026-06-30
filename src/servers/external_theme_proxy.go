@@ -2327,6 +2327,19 @@ html.bgo-external-theme[data-bgo-theme="dark"] [data-bgo-tool-status="empty"] {
   background: rgba(148, 163, 184, .10) !important;
   border-color: rgba(148, 163, 184, .22) !important;
 }
+html.bgo-external-theme .dashboard .stat-value {
+  display: flex !important;
+  flex-wrap: wrap !important;
+  align-items: baseline !important;
+  gap: 2px 12px !important;
+  white-space: normal !important;
+  word-break: keep-all !important;
+  min-width: 0 !important;
+}
+html.bgo-external-theme .dashboard .stat-extra {
+  white-space: nowrap !important;
+  min-width: max-content !important;
+}
 html.bgo-external-theme .bgo-tool-guard-notice {
   position: fixed !important;
   top: 18px !important;

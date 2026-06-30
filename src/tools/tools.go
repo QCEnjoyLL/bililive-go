@@ -17,6 +17,7 @@ import (
 
 	"github.com/bililive-go/bililive-go/src/configs"
 	blog "github.com/bililive-go/bililive-go/src/log"
+	"github.com/bililive-go/bililive-go/src/pkg/internalapi"
 	bilisentry "github.com/bililive-go/bililive-go/src/pkg/sentry"
 	"github.com/bililive-go/bililive-go/src/pkg/utils"
 	"github.com/tidwall/gjson"
@@ -393,6 +394,14 @@ func GetSchedulerPort() int {
 	return int(schedulerPort.Load())
 }
 
+func schedulerAPIURL(baseURL string, authEnabled bool) string {
+	baseURL = strings.TrimRight(baseURL, "/")
+	if !authEnabled {
+		return baseURL
+	}
+	return baseURL + internalapi.SchedulerPathPrefix()
+}
+
 func startScheduler() {
 	api := tools.Get()
 	if api == nil {
@@ -429,7 +438,7 @@ func startScheduler() {
 	if host == "" || host == "0.0.0.0" || host == "::" {
 		host = "localhost"
 	}
-	apiURL := "http://" + net.JoinHostPort(host, port)
+	apiURL := schedulerAPIURL("http://"+net.JoinHostPort(host, port), cfg.RPC.Auth.Enable)
 	dbPath := filepath.Join(cfg.AppDataPath, "db", "scheduler.db")
 
 	// Clean up stale port file from previous run
