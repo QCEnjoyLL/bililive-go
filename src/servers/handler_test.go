@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/bililive-go/bililive-go/src/configs"
+	"github.com/bililive-go/bililive-go/src/consts"
 )
 
 func TestGetSoopLiveAuthConfigDoesNotExposeSavedPassword(t *testing.T) {
@@ -73,6 +74,28 @@ func TestWebAuthMiddleware(t *testing.T) {
 	req.SetBasicAuth("admin", "secret")
 	handler.ServeHTTP(authorized, req)
 	assert.Equal(t, http.StatusNoContent, authorized.Code)
+}
+
+func TestLoginPageRendersCurrentVersion(t *testing.T) {
+	oldVersion := consts.AppVersion
+	consts.AppVersion = "v9.8.7"
+	defer func() { consts.AppVersion = oldVersion }()
+
+	cfg := configs.NewConfig()
+	cfg.RPC.Auth = configs.RPCAuth{
+		Enable:   true,
+		Username: "admin",
+		Password: "secret",
+	}
+	configs.SetCurrentConfig(cfg)
+
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/login", nil)
+	loginPage(recorder, req)
+
+	assert.Equal(t, http.StatusOK, recorder.Code)
+	assert.Contains(t, recorder.Body.String(), "v 9.8.7")
+	assert.NotContains(t, recorder.Body.String(), "{{APP_VERSION}}")
 }
 
 func TestServeWebAppAssetUsesExplicitContentType(t *testing.T) {

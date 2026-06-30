@@ -1,6 +1,7 @@
 package servers
 
 import (
+	"bytes"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -29,6 +30,8 @@ func TestInjectExternalThemeHTML(t *testing.T) {
 	assert.Contains(t, injected, "refreshExternalToolVersionPicker")
 	assert.Contains(t, injected, "refreshExternalToolInfo")
 	assert.Contains(t, injected, "refreshExternalToolLegend")
+	assert.Contains(t, injected, "refreshExternalVersionBadge")
+	assert.Contains(t, injected, "bgo-external-version-badge")
 	assert.Contains(t, injected, "syncDisplayedDefaultVersion")
 	assert.Contains(t, injected, "isCurrentVersionLabelText")
 	assert.Contains(t, injected, "updateToolVersionMeta")
@@ -74,6 +77,13 @@ func TestInjectExternalThemeHTML(t *testing.T) {
 	assert.Contains(t, injected, "#30d158")
 	assert.Contains(t, injected, "bgoRequiredToolUninstallMessage")
 	assert.Contains(t, injected, "bgo-tool-required-uninstall-notice")
+	assert.Contains(t, injected, "showToolGuardNotice")
+	assert.Contains(t, injected, "shouldBlockRequiredUninstallButton")
+	assert.Contains(t, injected, "countInstalledVersionCardsFromDOM")
+	assert.Contains(t, injected, "__bgoRequestURL")
+	assert.Contains(t, injected, "bgo-tool-guard-notice")
+	assert.Contains(t, injected, "body.err_msg || body.message")
+	assert.Contains(t, injected, "getToolVersionMeta")
 	assert.Contains(t, injected, "bgo-tool-empty-notice")
 	assert.Contains(t, injected, "isInternalToolGroup")
 	assert.Contains(t, injected, `\u5185\u90e8\u7ba1\u7406`)
@@ -151,6 +161,46 @@ func TestRequiredToolUninstallGuardBlocksLastInstalledVersion(t *testing.T) {
 	assert.Contains(t, rr.Body.String(), `"err_msg"`)
 	assert.Contains(t, rr.Body.String(), requiredToolLastVersionUninstallMessage)
 	assert.Contains(t, rr.Body.String(), "不能卸载所有版本")
+}
+
+func TestRequiredToolUninstallGuardBlocksToolsPrefixedWrappedStatus(t *testing.T) {
+	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/api/tools", r.URL.Path)
+		_, _ = io.WriteString(w, `{"value":[{"name":"biliLive-tools","tools":[{"version":"3.1.2-bgo.1","installed":false},{"version":"3.1.2-bgo.2","installed":true}]}]}`)
+	}))
+	defer remote.Close()
+	target, err := url.Parse(remote.URL)
+	require.NoError(t, err)
+
+	called := false
+	handler := guardProtectedToolUninstall(target, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusOK)
+	}))
+	req := httptest.NewRequest(http.MethodPost, "/tools/api/uninstall", strings.NewReader(`{"name":"biliLive-tools","version":"3.1.2-bgo.2"}`))
+	rr := httptest.NewRecorder()
+
+	handler.ServeHTTP(rr, req)
+
+	assert.Equal(t, http.StatusConflict, rr.Code)
+	assert.False(t, called)
+	assert.Contains(t, rr.Body.String(), requiredToolLastVersionUninstallMessage)
+}
+
+func TestRemoteToolAPIFallbackRewritesEmptyUninstallError(t *testing.T) {
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusConflict)
+	})
+	body := []byte(`{"name":"biliLive-tools","version":"3.1.2-bgo.2"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/uninstall", bytes.NewReader(body))
+	rr := httptest.NewRecorder()
+
+	serveRemoteToolAPIWithGuardFallback(rr, req, next, "/api/uninstall", body)
+
+	assert.Equal(t, http.StatusConflict, rr.Code)
+	assert.Contains(t, rr.Header().Get(contentType), contentTypeJSON)
+	assert.Contains(t, rr.Body.String(), `"err_msg"`)
+	assert.Contains(t, rr.Body.String(), requiredToolLastVersionUninstallMessage)
 }
 
 func TestRequiredToolUninstallGuardAllowsWhenAnotherVersionInstalled(t *testing.T) {

@@ -24,7 +24,9 @@ function customFetch(arg1: Parameters<typeof fetch>[0], ...args: any[]) {
                             errMsg = rsp.statusText;
                         }
                     }
-                    throw new Error(errMsg);
+                    const error = new Error(errMsg) as Error & { status?: number };
+                    error.status = rsp.status;
+                    throw error;
                 }
             })
             .then(data => {

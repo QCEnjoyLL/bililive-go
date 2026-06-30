@@ -183,6 +183,18 @@ func initMux(ctx context.Context) *mux.Router {
 	// /tools/ 动态反向代理：当 tools WebUI 端口未就绪时返回 503，
 	// 一旦端口出现或变化，热更新为对应端口的反向代理。
 	m.HandleFunc("/tools/api/status", handleToolsFastStatus).Methods(http.MethodGet)
+	protectedToolsAPI := func(w http.ResponseWriter, r *http.Request) {
+		port := tools.GetWebUIPort()
+		if port == 0 {
+			http.Error(w, "Tools Web UI 未就绪", http.StatusServiceUnavailable)
+			return
+		}
+		target, _ := url.Parse("http://localhost:" + strconv.Itoa(port))
+		proxy := guardProtectedToolUninstall(target, newExternalThemeReverseProxy(target))
+		http.StripPrefix("/tools", proxy).ServeHTTP(w, r)
+	}
+	m.HandleFunc("/tools/api/uninstall", protectedToolsAPI).Methods(http.MethodPost)
+	m.HandleFunc("/tools/api/toggle", protectedToolsAPI).Methods(http.MethodPost)
 	dyn := &dynamicHandler{}
 	// 设置初始占位 handler（使用统一的包装类型）
 	dyn.h.Store(handlerHolder{H: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

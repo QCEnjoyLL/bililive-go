@@ -16,6 +16,7 @@ import (
 	"github.com/gorilla/mux"
 
 	"github.com/bililive-go/bililive-go/src/configs"
+	"github.com/bililive-go/bililive-go/src/consts"
 )
 
 const (
@@ -157,7 +158,13 @@ func loginPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set(contentType, "text/html; charset=utf-8")
-	_, _ = io.WriteString(w, webAuthLoginHTML)
+	versionLabel := strings.TrimSpace(consts.AppVersion)
+	if strings.HasPrefix(strings.ToLower(versionLabel), "v") {
+		versionLabel = "v " + strings.TrimPrefix(versionLabel, "v")
+	} else if versionLabel != "" {
+		versionLabel = "v " + versionLabel
+	}
+	_, _ = io.WriteString(w, strings.ReplaceAll(webAuthLoginHTML, "{{APP_VERSION}}", versionLabel))
 }
 
 func loginWebUI(w http.ResponseWriter, r *http.Request) {
@@ -637,6 +644,29 @@ const webAuthLoginHTML = `<!doctype html>
       font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
       font-size: 12px;
     }
+    .version-badge {
+      position: fixed;
+      left: 18px;
+      bottom: 18px;
+      z-index: 20;
+      min-width: 64px;
+      height: 30px;
+      padding: 0 12px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border: 1px solid color-mix(in srgb, var(--line) 72%, transparent);
+      border-radius: 999px;
+      background: color-mix(in srgb, var(--panel) 82%, transparent);
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+      line-height: 1;
+      box-shadow: 0 10px 26px rgba(0, 0, 0, .14);
+      backdrop-filter: blur(16px) saturate(1.35);
+      -webkit-backdrop-filter: blur(16px) saturate(1.35);
+      pointer-events: none;
+    }
     @media (max-width: 760px) {
       body { padding: 16px; }
       .shell { min-height: auto; grid-template-columns: 1fr; }
@@ -711,6 +741,7 @@ const webAuthLoginHTML = `<!doctype html>
       </form>
     </section>
   </main>
+  <div class="version-badge" aria-label="当前版本 {{APP_VERSION}}">{{APP_VERSION}}</div>
   <script>
     const SETTINGS_KEY = 'bililive_go_local_settings';
     const modeSelect = document.getElementById('theme-mode-select');

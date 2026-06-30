@@ -41,12 +41,34 @@ type remoteToolItemStatus struct {
 
 type remoteToolUninstallRequest struct {
 	ToolName string `json:"toolName"`
+	Name     string `json:"name"`
+	Tool     string `json:"tool"`
 	Version  string `json:"version"`
 }
 
 type remoteToolToggleRequest struct {
 	ToolName string `json:"toolName"`
+	Name     string `json:"name"`
+	Tool     string `json:"tool"`
 	Enabled  bool   `json:"enabled"`
+}
+
+func (req remoteToolUninstallRequest) effectiveToolName() string {
+	for _, value := range []string{req.ToolName, req.Name, req.Tool} {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func (req remoteToolToggleRequest) effectiveToolName() string {
+	for _, value := range []string{req.ToolName, req.Name, req.Tool} {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 var requiredRemoteToolNames = map[string]struct{}{
@@ -63,7 +85,7 @@ var internalRemoteToolNames = map[string]struct{}{
 }
 
 const (
-	requiredToolLastVersionUninstallMessage = "\u8fd9\u662f\u5fc5\u9700 / \u9ed8\u8ba4\u5b89\u88c5\u5de5\u5177\uff0c\u5f55\u5236\u548c\u76f8\u5173\u529f\u80fd\u81f3\u5c11\u9700\u8981\u4fdd\u7559\u4e00\u4e2a\u5df2\u5b89\u88c5\u7248\u672c\uff0c\u4e0d\u80fd\u5378\u8f7d\u6240\u6709\u7248\u672c\u3002\u8bf7\u5148\u5b89\u88c5\u8be5\u5de5\u5177\u7684\u5176\u4ed6\u7248\u672c\uff0c\u786e\u8ba4\u53ef\u7528\u540e\u518d\u5378\u8f7d\u5f53\u524d\u7248\u672c\u3002"
+	requiredToolLastVersionUninstallMessage = "\u8fd9\u662f\u5fc5\u9700\u5de5\u5177\uff0c\u81f3\u5c11\u8981\u4fdd\u7559\u4e00\u4e2a\u5df2\u5b89\u88c5\u7248\u672c\uff0c\u4e0d\u80fd\u5378\u8f7d\u6240\u6709\u7248\u672c\uff1b\u5982\u9700\u5207\u6362\uff0c\u5148\u5b89\u88c5\u5176\u4ed6\u7248\u672c\u518d\u5378\u8f7d\u5f53\u524d\u7248\u672c\u3002"
 	uninstalledToolVersionMessage           = "\u8be5\u7248\u672c\u5c1a\u672a\u5b89\u88c5\uff0c\u65e0\u9700\u5378\u8f7d\u3002"
 	internalToolUninstallMessage            = "\u8fd9\u662f BiliLive-go \u81ea\u52a8\u7ba1\u7406\u7684\u5185\u90e8\u7ec4\u4ef6\uff0c\u4e0d\u80fd\u901a\u8fc7\u5916\u90e8\u5de5\u5177\u9875\u624b\u52a8\u5378\u8f7d\u3002"
 	internalToolToggleMessage               = "\u8fd9\u662f BiliLive-go \u81ea\u52a8\u7ba1\u7406\u7684\u5185\u90e8\u7ec4\u4ef6\uff0c\u4e0d\u80fd\u901a\u8fc7\u5916\u90e8\u5de5\u5177\u9875\u624b\u52a8\u542f\u7528\u6216\u7981\u7528\u3002"
@@ -75,10 +97,11 @@ const (
 func writeRemoteToolGuardError(w http.ResponseWriter, status int, msg string) {
 	w.Header().Set(contentType, contentTypeJSON)
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(commonResp{
-		ErrNo:  status,
-		ErrMsg: msg,
-		Data:   map[string]string{"reason": msg},
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"err_no":  status,
+		"err_msg": msg,
+		"message": msg,
+		"data":    map[string]string{"reason": msg},
 	})
 }
 
@@ -86,6 +109,7 @@ func guardProtectedToolUninstall(target *url.URL, next http.Handler) http.Handle
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost {
 			path := strings.TrimRight(r.URL.Path, "/")
+			path = strings.TrimPrefix(path, "/tools")
 			if path != "/api/uninstall" && path != "/api/toggle" {
 				next.ServeHTTP(w, r)
 				return
@@ -100,14 +124,15 @@ func guardProtectedToolUninstall(target *url.URL, next http.Handler) http.Handle
 			if path == "/api/uninstall" {
 				var req remoteToolUninstallRequest
 				if err := json.Unmarshal(body, &req); err == nil {
-					if isInternalRemoteTool(req.ToolName) {
+					toolName := req.effectiveToolName()
+					if isInternalRemoteTool(toolName) {
 						writeRemoteToolGuardError(w, http.StatusConflict, internalToolUninstallMessage)
 						return
 					}
 
 					decision, err := shouldBlockRemoteToolUninstall(r, target, req)
 					if err != nil {
-						if isRequiredRemoteTool(req.ToolName) {
+						if isRequiredRemoteTool(toolName) {
 							writeRemoteToolGuardError(w, http.StatusBadGateway, "无法确认必需工具安装状态，已取消卸载: "+err.Error())
 							return
 						}
@@ -132,9 +157,75 @@ func guardProtectedToolUninstall(target *url.URL, next http.Handler) http.Handle
 					}
 				}
 			}
+
+			if path == "/api/uninstall" || path == "/api/toggle" {
+				serveRemoteToolAPIWithGuardFallback(w, r, next, path, body)
+				return
+			}
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+type bufferedToolAPIResponseWriter struct {
+	header http.Header
+	body   bytes.Buffer
+	status int
+}
+
+func (w *bufferedToolAPIResponseWriter) Header() http.Header {
+	return w.header
+}
+
+func (w *bufferedToolAPIResponseWriter) WriteHeader(status int) {
+	if w.status == 0 {
+		w.status = status
+	}
+}
+
+func (w *bufferedToolAPIResponseWriter) Write(p []byte) (int, error) {
+	if w.status == 0 {
+		w.status = http.StatusOK
+	}
+	return w.body.Write(p)
+}
+
+func serveRemoteToolAPIWithGuardFallback(w http.ResponseWriter, r *http.Request, next http.Handler, path string, body []byte) {
+	rec := &bufferedToolAPIResponseWriter{header: make(http.Header)}
+	next.ServeHTTP(rec, r)
+	status := rec.status
+	if status == 0 {
+		status = http.StatusOK
+	}
+	if status >= 400 && strings.TrimSpace(rec.body.String()) == "" {
+		writeRemoteToolGuardError(w, status, remoteToolFallbackMessage(path, body))
+		return
+	}
+	for key, values := range rec.header {
+		for _, value := range values {
+			w.Header().Add(key, value)
+		}
+	}
+	w.WriteHeader(status)
+	_, _ = w.Write(rec.body.Bytes())
+}
+
+func remoteToolFallbackMessage(path string, body []byte) string {
+	if path == "/api/uninstall" {
+		var req remoteToolUninstallRequest
+		if err := json.Unmarshal(body, &req); err == nil && isRequiredRemoteTool(req.effectiveToolName()) {
+			return requiredToolLastVersionUninstallMessage
+		}
+		return "卸载失败：外部工具服务未返回具体原因，请刷新工具状态后重试。"
+	}
+	if path == "/api/toggle" {
+		var req remoteToolToggleRequest
+		if err := json.Unmarshal(body, &req); err == nil && isRequiredRemoteTool(req.effectiveToolName()) && !req.Enabled {
+			return requiredToolDisableMessage
+		}
+		return "启用状态切换失败：外部工具服务未返回具体原因，请刷新工具状态后重试。"
+	}
+	return "外部工具操作失败。"
 }
 
 func readAndRestoreRequestBody(r *http.Request) ([]byte, error) {
@@ -151,10 +242,10 @@ func readAndRestoreRequestBody(r *http.Request) ([]byte, error) {
 }
 
 func shouldBlockRemoteToolToggle(r *http.Request, target *url.URL, req remoteToolToggleRequest) (uninstallGuardDecision, error) {
-	if strings.TrimSpace(req.ToolName) == "" {
+	if strings.TrimSpace(req.effectiveToolName()) == "" {
 		return uninstallGuardDecision{}, nil
 	}
-	if isInternalRemoteTool(req.ToolName) {
+	if isInternalRemoteTool(req.effectiveToolName()) {
 		return uninstallGuardDecision{
 			block:  true,
 			reason: internalToolToggleMessage,
@@ -178,7 +269,7 @@ func shouldBlockRemoteToolToggle(r *http.Request, target *url.URL, req remoteToo
 }
 
 func decideRemoteToolEnable(req remoteToolToggleRequest, groups []remoteToolGroupStatus) (uninstallGuardDecision, error) {
-	groupName := normalizeRemoteToolName(req.ToolName)
+	groupName := normalizeRemoteToolName(req.effectiveToolName())
 	for _, group := range groups {
 		if normalizeRemoteToolName(group.Name) != groupName {
 			continue
@@ -212,7 +303,7 @@ func decideRemoteToolEnable(req remoteToolToggleRequest, groups []remoteToolGrou
 		return uninstallGuardDecision{}, nil
 	}
 
-	return uninstallGuardDecision{}, fmt.Errorf("\u672a\u627e\u5230\u5de5\u5177\u7ec4 %s", req.ToolName)
+	return uninstallGuardDecision{}, fmt.Errorf("\u672a\u627e\u5230\u5de5\u5177\u7ec4 %s", req.effectiveToolName())
 }
 
 type uninstallGuardDecision struct {
@@ -221,7 +312,7 @@ type uninstallGuardDecision struct {
 }
 
 func shouldBlockRemoteToolUninstall(r *http.Request, target *url.URL, req remoteToolUninstallRequest) (uninstallGuardDecision, error) {
-	if strings.TrimSpace(req.ToolName) == "" || strings.TrimSpace(req.Version) == "" {
+	if strings.TrimSpace(req.effectiveToolName()) == "" || strings.TrimSpace(req.Version) == "" {
 		return uninstallGuardDecision{}, nil
 	}
 
@@ -233,7 +324,7 @@ func shouldBlockRemoteToolUninstall(r *http.Request, target *url.URL, req remote
 }
 
 func decideRemoteToolUninstall(req remoteToolUninstallRequest, groups []remoteToolGroupStatus) (uninstallGuardDecision, error) {
-	groupName := normalizeRemoteToolName(req.ToolName)
+	groupName := normalizeRemoteToolName(req.effectiveToolName())
 	for _, group := range groups {
 		if normalizeRemoteToolName(group.Name) != groupName {
 			continue
@@ -256,7 +347,7 @@ func decideRemoteToolUninstall(req remoteToolUninstallRequest, groups []remoteTo
 				reason: uninstalledToolVersionMessage,
 			}, nil
 		}
-		if isRequiredRemoteTool(req.ToolName) && installedCount <= 1 {
+		if isRequiredRemoteTool(req.effectiveToolName()) && installedCount <= 1 {
 			return uninstallGuardDecision{
 				block:  true,
 				reason: requiredToolLastVersionUninstallMessage,
@@ -265,7 +356,7 @@ func decideRemoteToolUninstall(req remoteToolUninstallRequest, groups []remoteTo
 		return uninstallGuardDecision{}, nil
 	}
 
-	return uninstallGuardDecision{}, fmt.Errorf("\u672a\u627e\u5230\u5de5\u5177\u7ec4 %s", req.ToolName)
+	return uninstallGuardDecision{}, fmt.Errorf("\u672a\u627e\u5230\u5de5\u5177\u7ec4 %s", req.effectiveToolName())
 }
 
 func fetchRemoteToolGroups(r *http.Request, target *url.URL) ([]remoteToolGroupStatus, error) {
@@ -287,9 +378,24 @@ func fetchRemoteToolGroups(r *http.Request, target *url.URL) ([]remoteToolGroupS
 		return nil, fmt.Errorf("RemoteTools 返回状态码 %d", resp.StatusCode)
 	}
 
-	var groups []remoteToolGroupStatus
-	if err := json.NewDecoder(resp.Body).Decode(&groups); err != nil {
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
 		return nil, err
+	}
+	var groups []remoteToolGroupStatus
+	if err := json.Unmarshal(body, &groups); err == nil {
+		return groups, nil
+	}
+	var wrapped struct {
+		Value []remoteToolGroupStatus `json:"value"`
+		Data  []remoteToolGroupStatus `json:"data"`
+	}
+	if err := json.Unmarshal(body, &wrapped); err != nil {
+		return nil, err
+	}
+	groups = wrapped.Value
+	if len(groups) == 0 {
+		groups = wrapped.Data
 	}
 	return groups, nil
 }
@@ -437,15 +543,38 @@ const externalThemeBridgeHTML = `
           var rewritten = rewriteURL(input.url);
           if (rewritten !== input.url) input = new Request(rewritten, input);
         }
-        return nativeFetch.call(this, input, init);
+        var requestURL = typeof input === 'string' ? input : (input && input.url || '');
+        return nativeFetch.call(this, input, init).then(function (resp) {
+          if (resp && !resp.ok && /\/api\/(?:uninstall|toggle)(?:[?#]|$)/.test(String(requestURL))) {
+            resp.clone().json().then(function (body) {
+              var reason = body && (body.err_msg || body.message || (body.data && body.data.reason));
+              if (reason) showToolGuardNotice(reason, 'error');
+            }).catch(function () {});
+          }
+          return resp;
+        });
       };
     }
 
     if (window.XMLHttpRequest && window.XMLHttpRequest.prototype && window.XMLHttpRequest.prototype.open) {
       var nativeOpen = window.XMLHttpRequest.prototype.open;
+      var nativeSend = window.XMLHttpRequest.prototype.send;
       window.XMLHttpRequest.prototype.open = function (method, url) {
         arguments[1] = rewriteURL(url);
+        this.__bgoRequestURL = arguments[1];
         return nativeOpen.apply(this, arguments);
+      };
+      window.XMLHttpRequest.prototype.send = function () {
+        this.addEventListener('loadend', function () {
+          if (this.status >= 400 && /\/api\/(?:uninstall|toggle)(?:[?#]|$)/.test(String(this.__bgoRequestURL || ''))) {
+            try {
+              var body = JSON.parse(this.responseText || '{}');
+              var reason = body && (body.err_msg || body.message || (body.data && body.data.reason));
+              if (reason) showToolGuardNotice(reason, 'error');
+            } catch (err) {}
+          }
+        });
+        return nativeSend.apply(this, arguments);
       };
     }
 
@@ -562,8 +691,27 @@ const externalThemeBridgeHTML = `
   var bgoToolVersionMetaLoaded = false;
   var bgoToolVersionMetaLoading = false;
   var bgoToolVersionMetaLastLoadedAt = 0;
-  var bgoRequiredToolUninstallMessage = '\u8fd9\u662f\u5fc5\u9700 / \u9ed8\u8ba4\u5b89\u88c5\u5de5\u5177\uff0c\u5f55\u5236\u548c\u76f8\u5173\u529f\u80fd\u81f3\u5c11\u9700\u8981\u4fdd\u7559\u4e00\u4e2a\u5df2\u5b89\u88c5\u7248\u672c\uff0c\u4e0d\u80fd\u5378\u8f7d\u6240\u6709\u7248\u672c\u3002\u8bf7\u5148\u5b89\u88c5\u8be5\u5de5\u5177\u7684\u5176\u4ed6\u7248\u672c\uff0c\u786e\u8ba4\u53ef\u7528\u540e\u518d\u5378\u8f7d\u5f53\u524d\u7248\u672c\u3002';
+  var bgoRequiredToolUninstallMessage = '\u8fd9\u662f\u5fc5\u9700\u5de5\u5177\uff0c\u81f3\u5c11\u8981\u4fdd\u7559\u4e00\u4e2a\u5df2\u5b89\u88c5\u7248\u672c\uff0c\u4e0d\u80fd\u5378\u8f7d\u6240\u6709\u7248\u672c\uff1b\u5982\u9700\u5207\u6362\uff0c\u5148\u5b89\u88c5\u5176\u4ed6\u7248\u672c\u518d\u5378\u8f7d\u5f53\u524d\u7248\u672c\u3002';
   var bgoRequiredToolDisableMessage = '\u8fd9\u662f\u5fc5\u9700 / \u9ed8\u8ba4\u5b89\u88c5\u5de5\u5177\uff0c\u5f55\u5236\u548c\u76f8\u5173\u529f\u80fd\u4f9d\u8d56\u5b83\u4fdd\u6301\u542f\u7528\uff0c\u4e0d\u80fd\u505c\u7528\u3002';
+  var bgoToolGuardNoticeTimer = 0;
+  function showToolGuardNotice(text, type) {
+    text = String(text || '').trim();
+    if (!text) return;
+    var notice = document.querySelector('.bgo-tool-guard-notice');
+    if (!notice) {
+      notice = document.createElement('div');
+      notice.className = 'bgo-tool-guard-notice';
+      notice.setAttribute('role', 'alert');
+      document.body.appendChild(notice);
+    }
+    notice.dataset.bgoNoticeType = type || 'warning';
+    notice.textContent = text;
+    notice.dataset.bgoVisible = 'true';
+    if (bgoToolGuardNoticeTimer) window.clearTimeout(bgoToolGuardNoticeTimer);
+    bgoToolGuardNoticeTimer = window.setTimeout(function () {
+      notice.dataset.bgoVisible = 'false';
+    }, 7000);
+  }
   var bgoToolInfoMap = {
     'ffmpeg': {
       role: 'required',
@@ -679,7 +827,7 @@ const externalThemeBridgeHTML = `
       });
       var currentState = currentVersionCandidate && byVersion[currentVersionCandidate];
       var currentVersion = currentState && currentState.installed ? currentVersionCandidate : '';
-      next[group.name] = {
+      var entry = {
         versions: versions,
         pinnedVersion: currentVersion,
         currentVersion: currentVersion,
@@ -689,6 +837,8 @@ const externalThemeBridgeHTML = `
         recommendedVersion: recommendedVersion,
         byVersion: byVersion
       };
+      next[group.name] = entry;
+      next[normalizeToolName(group.name)] = entry;
     });
     bgoToolVersionMeta = next;
     bgoToolVersionMetaLoaded = true;
@@ -713,7 +863,7 @@ const externalThemeBridgeHTML = `
     if (location.pathname.indexOf('/tools') < 0 && location.pathname.indexOf('/remotetools') < 0) return;
     Array.prototype.slice.call(document.querySelectorAll('h4')).forEach(function (title) {
       var groupName = (title.textContent || '').trim();
-      var meta = bgoToolVersionMeta[groupName];
+      var meta = getToolVersionMeta(groupName);
       var groupCard = title.closest('.ant-card');
       if (!groupCard || !meta || !meta.versions) return;
       groupCard.dataset.bgoGroupName = groupName;
@@ -768,17 +918,20 @@ const externalThemeBridgeHTML = `
     return null;
   }
   function getVersionState(groupName, version) {
-    var meta = bgoToolVersionMeta[groupName] || {};
+    var meta = getToolVersionMeta(groupName);
     var state = meta.byVersion && meta.byVersion[version];
     if (state) return state;
     return { installed: false, status: 'missing', label: '\u672a\u5b89\u88c5' };
   }
+  function getToolVersionMeta(groupName) {
+    return bgoToolVersionMeta[groupName] || bgoToolVersionMeta[normalizeToolName(groupName)] || {};
+  }
   function getCurrentToolVersion(groupName) {
-    var meta = bgoToolVersionMeta[groupName] || {};
+    var meta = getToolVersionMeta(groupName);
     return meta.currentVersion || meta.pinnedVersion || '';
   }
   function getRecommendedToolVersion(groupName) {
-    var meta = bgoToolVersionMeta[groupName] || {};
+    var meta = getToolVersionMeta(groupName);
     return meta.recommendedVersion || meta.defaultVersion || (meta.versions && meta.versions[0]) || '';
   }
   function getCurrentVersionState(groupName) {
@@ -905,11 +1058,13 @@ const externalThemeBridgeHTML = `
   }
   function updateToolVersionMeta(groupName, version) {
     if (!groupName || !version) return;
-    var meta = bgoToolVersionMeta[groupName] || { versions: [] };
+    var meta = getToolVersionMeta(groupName);
+    if (!meta.versions) meta = { versions: [] };
     meta.pinnedVersion = version;
     meta.currentVersion = version;
     meta.enabled = true;
     bgoToolVersionMeta[groupName] = meta;
+    bgoToolVersionMeta[normalizeToolName(groupName)] = meta;
   }
   function setVersionStateBadge(groupCard, groupName, version) {
     var badge = groupCard.querySelector(':scope .bgo-tool-version-state');
@@ -926,18 +1081,18 @@ const externalThemeBridgeHTML = `
     return !!(info && info.role === 'internal');
   }
   function isEmptyToolGroup(groupName) {
-    var meta = bgoToolVersionMeta[groupName];
+    var meta = getToolVersionMeta(groupName);
     return !!(meta && Array.isArray(meta.versions) && meta.versions.length === 0);
   }
   function countInstalledToolVersions(groupName) {
-    var meta = bgoToolVersionMeta[groupName] || {};
+    var meta = getToolVersionMeta(groupName);
     var byVersion = meta.byVersion || {};
     return Object.keys(byVersion).filter(function (version) {
       return byVersion[version] && byVersion[version].installed;
     }).length;
   }
   function isToolGroupEnableAvailable(groupName) {
-    var meta = bgoToolVersionMeta[groupName];
+    var meta = getToolVersionMeta(groupName);
     if (!meta || !Array.isArray(meta.versions)) return true;
     if (countInstalledToolVersions(groupName) <= 0) return false;
     var pinned = meta.requestedPinnedVersion || '';
@@ -967,7 +1122,7 @@ const externalThemeBridgeHTML = `
     });
   }
   function syncToolGroupToggleState(groupCard, groupName) {
-    var meta = bgoToolVersionMeta[groupName];
+    var meta = getToolVersionMeta(groupName);
     if (!groupCard || !meta) return;
     var available = isToolGroupEnableAvailable(groupName);
     var required = isRequiredToolGroup(groupName);
@@ -1293,7 +1448,7 @@ const externalThemeBridgeHTML = `
       if (!groupName) return;
       var groupCard = title.closest('.ant-card');
       if (!groupCard || groupCard.dataset.bgoVersionPickerBusy === '1') return;
-      var meta = bgoToolVersionMeta[groupName];
+      var meta = getToolVersionMeta(groupName);
       hideOriginalVersionSections(groupCard);
       if (meta) {
         syncToolGroupToggleState(groupCard, groupName);
@@ -1436,6 +1591,39 @@ const externalThemeBridgeHTML = `
       }
     });
   }
+  var bgoExternalVersionLoaded = false;
+  function formatExternalVersionLabel(version) {
+    version = String(version || '').trim();
+    if (!version) return '';
+    return version.toLowerCase().indexOf('v') === 0 ? 'v ' + version.slice(1) : 'v ' + version;
+  }
+  function setExternalVersionBadge(version) {
+    var label = formatExternalVersionLabel(version);
+    if (!label) return;
+    var badge = document.querySelector('.bgo-external-version-badge');
+    if (!badge) {
+      badge = document.createElement('div');
+      badge.className = 'bgo-external-version-badge';
+      badge.setAttribute('aria-label', '\u5f53\u524d\u7248\u672c ' + label);
+      document.body.appendChild(badge);
+    }
+    badge.textContent = label;
+  }
+  function refreshExternalVersionBadge() {
+    if (bgoExternalVersionLoaded) return;
+    bgoExternalVersionLoaded = true;
+    fetch('/api/info', { cache: 'no-store', credentials: 'same-origin' })
+      .then(function (resp) {
+        if (!resp.ok) throw new Error('info failed');
+        return resp.json();
+      })
+      .then(function (info) {
+        setExternalVersionBadge(info && (info.app_version || info.appVersion));
+      })
+      .catch(function () {
+        bgoExternalVersionLoaded = false;
+      });
+  }
   function refreshExternalTextHints() {
     if (document.documentElement.dataset.bgoTheme !== 'dark') return;
     document.querySelectorAll('span,div,p,small,label').forEach(function (el) {
@@ -1499,6 +1687,7 @@ const externalThemeBridgeHTML = `
     refreshExternalTextHints();
     refreshExternalToolInfo();
     refreshExternalToolVersionPicker();
+    refreshExternalVersionBadge();
   }
   function scheduleExternalThemeRefresh(delay) {
     if (bgoExternalRefreshTimer) return;
@@ -1537,6 +1726,44 @@ const externalThemeBridgeHTML = `
       groupCard.dataset.bgoVersionPreparing = 'false';
     }, 700);
   }
+  function getToolGroupNameFromCard(groupCard) {
+    if (!groupCard) return '';
+    if (groupCard.dataset && groupCard.dataset.bgoGroupName) return groupCard.dataset.bgoGroupName;
+    var title = groupCard.querySelector && groupCard.querySelector(':scope h4');
+    return title ? (title.textContent || '').trim() : '';
+  }
+  function isInstalledVersionCardFromDOM(card) {
+    var text = String(card && card.textContent || '');
+    return /\u5df2\u5b89\u88c5|\u5df2\u5b8c\u6210|Installed|Completed/i.test(text);
+  }
+  function countInstalledVersionCardsFromDOM(groupCard) {
+    if (!groupCard) return 0;
+    var cards = Array.prototype.slice.call(groupCard.querySelectorAll('[data-bgo-tool-version-card="true"]'));
+    if (!cards.length) {
+      cards = Array.prototype.slice.call(groupCard.querySelectorAll('.ant-card')).filter(function (card) {
+        return card !== groupCard && getCardVersion(card);
+      });
+    }
+    return cards.filter(isInstalledVersionCardFromDOM).length;
+  }
+  function shouldBlockRequiredUninstallButton(button) {
+    if (!button) return false;
+    var text = (button.textContent || '').trim();
+    if (button.dataset && button.dataset.bgoToolAction === 'uninstall') {
+      // Continue.
+    } else if (text !== '\u5378\u8f7d' && text !== 'Uninstall') {
+      return false;
+    }
+    var groupCard = getToolGroupCardFromControl(button);
+    var groupName = getToolGroupNameFromCard(groupCard);
+    if (!groupName || !isRequiredToolGroup(groupName)) return false;
+    var versionCard = button.closest && (button.closest('[data-bgo-tool-version-card="true"]') || button.closest('.ant-card'));
+    if (!versionCard || versionCard === groupCard) return false;
+    var version = (versionCard.dataset && versionCard.dataset.bgoToolVersion) || getCardVersion(versionCard);
+    if (!version) return false;
+    if (isLastRequiredInstalledVersion(groupName, getVersionState(groupName, version))) return true;
+    return isInstalledVersionCardFromDOM(versionCard) && countInstalledVersionCardsFromDOM(groupCard) <= 1;
+  }
   runExternalThemeRefresh();
   window.addEventListener('click', function (event) {
     var target = event.target && event.target.closest ? event.target.closest('button,.ant-btn,[role="button"],[role="switch"],.ant-switch,.rc-switch') : null;
@@ -1553,10 +1780,10 @@ const externalThemeBridgeHTML = `
       window.alert(bgoRequiredToolDisableMessage);
       return;
     }
-    if (target.dataset && target.dataset.bgoToolRequiredLastInstalled === 'true') {
+    if ((target.dataset && target.dataset.bgoToolRequiredLastInstalled === 'true') || shouldBlockRequiredUninstallButton(target)) {
       event.preventDefault();
       event.stopImmediatePropagation();
-      window.alert(bgoRequiredToolUninstallMessage);
+      showToolGuardNotice(bgoRequiredToolUninstallMessage, 'error');
       return;
     }
     var text = (target.textContent || '').trim();
@@ -2099,6 +2326,62 @@ html.bgo-external-theme[data-bgo-theme="dark"] [data-bgo-tool-status="empty"] {
   color: var(--bgo-ext-muted, var(--bgo-muted)) !important;
   background: rgba(148, 163, 184, .10) !important;
   border-color: rgba(148, 163, 184, .22) !important;
+}
+html.bgo-external-theme .bgo-tool-guard-notice {
+  position: fixed !important;
+  top: 18px !important;
+  left: 50% !important;
+  z-index: 2147483000 !important;
+  max-width: min(720px, calc(100vw - 32px)) !important;
+  padding: 10px 14px !important;
+  border-radius: 10px !important;
+  border: 1px solid rgba(255, 120, 117, .34) !important;
+  background: color-mix(in srgb, #fff 90%, #fff2f0) !important;
+  color: #a8071a !important;
+  box-shadow: 0 16px 42px rgba(15, 23, 42, .18) !important;
+  font-size: 13px !important;
+  font-weight: 700 !important;
+  line-height: 1.55 !important;
+  transform: translate(-50%, -10px) !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+  transition: opacity .18s ease, transform .18s ease !important;
+  backdrop-filter: blur(16px) saturate(1.25) !important;
+  -webkit-backdrop-filter: blur(16px) saturate(1.25) !important;
+}
+html.bgo-external-theme .bgo-tool-guard-notice[data-bgo-visible="true"] {
+  transform: translate(-50%, 0) !important;
+  opacity: 1 !important;
+}
+html.bgo-external-theme[data-bgo-theme="dark"] .bgo-tool-guard-notice {
+  background: color-mix(in srgb, var(--bgo-ext-elevated-bg, var(--bgo-elevated-bg)) 88%, rgba(255, 120, 117, .16)) !important;
+  color: #ffb4ab !important;
+  border-color: rgba(255, 120, 117, .36) !important;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, .32) !important;
+}
+html.bgo-external-theme .bgo-external-version-badge {
+  position: fixed !important;
+  left: 18px !important;
+  bottom: 18px !important;
+  z-index: 1200 !important;
+  min-width: 64px !important;
+  height: 30px !important;
+  padding: 0 12px !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  border: 1px solid color-mix(in srgb, var(--bgo-ext-border, var(--bgo-border)) 72%, transparent) !important;
+  border-radius: 999px !important;
+  background: color-mix(in srgb, var(--bgo-ext-elevated-bg, var(--bgo-elevated-bg)) 82%, transparent) !important;
+  color: var(--bgo-ext-muted, var(--bgo-muted)) !important;
+  font-size: 12px !important;
+  font-weight: 700 !important;
+  line-height: 1 !important;
+  letter-spacing: 0 !important;
+  box-shadow: 0 10px 26px rgba(0, 0, 0, .14) !important;
+  backdrop-filter: blur(16px) saturate(1.35) !important;
+  -webkit-backdrop-filter: blur(16px) saturate(1.35) !important;
+  pointer-events: none !important;
 }
 html.bgo-external-theme[data-bgo-theme="dark"] :where(
   .text-green-500,

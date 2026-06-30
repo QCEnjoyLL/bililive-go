@@ -37,6 +37,16 @@ const { Title, Text, Paragraph } = Typography;
 // 默认隐藏，本地开发时改为 true 以显示完整的版本管理 UI
 const ENABLE_VERSION_SWITCH_UI = false;
 
+const isAuthError = (err: any) => {
+  const msg = String(err?.message || err || '');
+  return err?.status === 401 || err?.status === 403 || msg.includes('请先登录 WebUI');
+};
+
+const redirectToLogin = () => {
+  const next = `${window.location.pathname}${window.location.search}${window.location.hash}` || '/update';
+  window.location.assign(`/login?next=${encodeURIComponent(next)}`);
+};
+
 // 更新状态类型
 interface UpdateInfo {
   version: string;
@@ -154,6 +164,11 @@ const UpdatePage: React.FC = () => {
         setRollbackInfo(null);
       }
     } catch (err: any) {
+      if (isAuthError(err)) {
+        message.warning('更新已完成或会话已失效，需要重新登录 WebUI');
+        setTimeout(redirectToLogin, 800);
+        return;
+      }
       console.error('加载更新状态失败:', err);
     } finally {
       setLoading(false);
@@ -297,8 +312,8 @@ const UpdatePage: React.FC = () => {
   const doApplyUpdate = async (graceful: boolean) => {
     setApplying(true);
     try {
-      await api.applyUpdate({ gracefulWait: graceful, forceNow: !graceful });
-      if (graceful) {
+      const result: any = await api.applyUpdate({ gracefulWait: graceful, forceNow: !graceful });
+      if (result?.status === 'waiting') {
         message.success('已启用优雅更新模式，将在所有录制结束后自动更新');
         await loadData();
       } else {
@@ -306,6 +321,11 @@ const UpdatePage: React.FC = () => {
         waitForServerRestart();
       }
     } catch (err: any) {
+      if (isAuthError(err)) {
+        message.warning('更新已完成或会话已失效，需要重新登录 WebUI');
+        setTimeout(redirectToLogin, 800);
+        return;
+      }
       setError(err?.message || '应用更新失败');
       message.error('应用更新失败');
     } finally {

@@ -23,6 +23,46 @@ import {
   ThemePalette,
 } from './utils/settings';
 import { applyThemeVariables, getSystemThemeMode, getThemeColors } from './utils/theme';
+import API from './utils/api';
+
+const api = new API();
+
+const formatVersionLabel = (version?: string) => {
+  const value = String(version || '').trim();
+  if (!value) return '';
+  return value.toLowerCase().startsWith('v') ? `v ${value.slice(1)}` : `v ${value}`;
+};
+
+const AppVersionBadge: React.FC = () => {
+  const [version, setVersion] = React.useState('');
+
+  React.useEffect(() => {
+    let cancelled = false;
+    api.getLiveInfo()
+      .then((info: any) => {
+        if (!cancelled) {
+          setVersion(info?.app_version || info?.appVersion || '');
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setVersion('');
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const label = formatVersionLabel(version);
+  if (!label) return null;
+
+  return (
+    <div className="app-version-badge" aria-label={`当前版本 ${label}`}>
+      {label}
+    </div>
+  );
+};
 
 const App: React.FC = () => {
   const [themeMode, setThemeModeState] = React.useState<ThemeMode>(() => getThemeMode());
@@ -84,6 +124,7 @@ const App: React.FC = () => {
     >
       <UpdateBanner />
       <RuntimeReadinessBanner />
+      <AppVersionBadge />
       <RootLayout
         themeMode={themeMode}
         resolvedThemeMode={resolvedThemeMode}
