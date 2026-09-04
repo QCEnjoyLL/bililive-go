@@ -181,10 +181,10 @@ test.describe('添加直播间对话框测试', () => {
     const modal = page.locator('.ant-modal');
     const autoCompleteSwitch = modal.getByRole('switch', { name: '自动补全 BoyFriend 直播间链接' });
     await expect(autoCompleteSwitch).toBeChecked();
-    await modal.locator('input').fill('tommyjoyer');
+    await modal.locator('input').fill('12345');
     await modal.getByRole('button', { name: /确定|OK/i }).click();
 
-    await expect.poll(() => submittedURL).toBe('https://zh.boyfriend.show/tommyjoyer');
+    await expect.poll(() => submittedURL).toBe('https://zh.boyfriend.show/12345');
   });
 });
 

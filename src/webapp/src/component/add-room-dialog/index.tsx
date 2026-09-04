@@ -97,7 +97,7 @@ class AddRoomDialog extends React.Component<Props> {
                     <Input
                         size="large"
                         value={textView}
-                        placeholder="tommyjoyer 或 https://live.bilibili.com/6"
+                        placeholder="abc 或 12345 或 https://live.bilibili.com/6"
                         onChange={this.textChange}
                         onPressEnter={this.handleOk}
                     />
