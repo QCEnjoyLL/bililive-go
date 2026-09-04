@@ -188,3 +188,45 @@ test.describe('添加直播间对话框测试', () => {
   });
 });
 
+test.describe('直播间列表分页测试', () => {
+  test('默认每页 10 条并可切换为每页 20 条', async ({ page }) => {
+    const rooms = Array.from({ length: 15 }, (_, index) => ({
+      id: `pagination-room-${index + 1}`,
+      host_name: `anchor-${index + 1}`,
+      room_name: `room-${index + 1}`,
+      live_url: `https://example.com/${index + 1}`,
+      platform_cn_name: '测试平台',
+      listening: false,
+      recording: false,
+      recording_preparing: false,
+      initializing: false,
+      notify_only: false,
+      status: false,
+    }));
+
+    await page.route('**/api/lives', async (route) => {
+      if (route.request().method() === 'GET') {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify(rooms),
+        });
+        return;
+      }
+      await route.continue();
+    });
+
+    await page.goto('/');
+
+    const table = page.locator('.live-list-table');
+    const rows = table.locator('.ant-table-tbody > tr.ant-table-row');
+    await expect(rows).toHaveCount(10);
+    await expect(table.locator('.ant-pagination')).toContainText('共 15 个直播间');
+
+    await table.locator('.ant-pagination-options .ant-select').click();
+    await page.locator('.ant-select-dropdown:visible .ant-select-item-option').filter({ hasText: /^20/ }).click();
+
+    await expect(rows).toHaveCount(15);
+  });
+});
+

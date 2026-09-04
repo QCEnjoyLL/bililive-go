@@ -2195,7 +2195,12 @@ class LiveList extends React.Component<Props, IState> {
                             columns={this.getColumnsWithSort((this.state.window.screen.width > 768) ? this.columns : this.smallColumns)}
                             dataSource={this.state.list}
                             size={(this.state.window.screen.width > 768) ? "large" : "middle"}
-                            pagination={false}
+                            pagination={{
+                                defaultPageSize: 10,
+                                pageSizeOptions: [10, 20, 50, 100],
+                                showSizeChanger: true,
+                                showTotal: total => `共 ${total} 个直播间`,
+                            }}
                             expandedRowKeys={this.state.expandedRowKeys}
                             expandedRowRender={this.renderExpandedRow}
                             rowKey={record => record.roomId}
