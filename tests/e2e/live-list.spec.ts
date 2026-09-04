@@ -154,5 +154,37 @@ test.describe('添加直播间对话框测试', () => {
       await page.locator('.ant-modal-close').click();
     }
   });
+
+  test('默认将 BoyFriend 房间号补全为完整链接', async ({ page }) => {
+    let submittedURL = '';
+    await page.route('**/api/lives', async (route) => {
+      if (route.request().method() !== 'POST') {
+        await route.continue();
+        return;
+      }
+      const body = route.request().postDataJSON();
+      submittedURL = body[0].url;
+      await route.fulfill({ status: 200, contentType: 'application/json', body: '{}' });
+    });
+    await page.route('**/api/config', async (route) => {
+      if (route.request().method() !== 'PUT') {
+        await route.continue();
+        return;
+      }
+      await route.fulfill({ status: 200, contentType: 'application/json', body: '{"err_no":0}' });
+    });
+
+    const addButton = page.locator('button').filter({ hasText: /添加|新增/i }).first();
+    await expect(addButton).toBeVisible();
+    await addButton.click();
+
+    const modal = page.locator('.ant-modal');
+    const autoCompleteSwitch = modal.getByRole('switch', { name: '自动补全 BoyFriend 直播间链接' });
+    await expect(autoCompleteSwitch).toBeChecked();
+    await modal.locator('input').fill('tommyjoyer');
+    await modal.getByRole('button', { name: /确定|OK/i }).click();
+
+    await expect.poll(() => submittedURL).toBe('https://zh.boyfriend.show/tommyjoyer');
+  });
 });
 

@@ -73,9 +73,6 @@ const (
 	playlistLoopIdle    = 50 * time.Millisecond
 )
 
-// segRe 匹配分段文件名 {id}_{msn}_{hash}_{ts}(_partN).mp4，提取 hash。
-// MOUFLON hash 是 base64 风格字符串，可能包含 +、-、_ 等非字母数字字符。
-var segRe = regexp.MustCompile(`_\d+_(.+)_\d+(?:_part\d+)?\.mp4`)
 var segPartRe = regexp.MustCompile(`_(\d+)_(.+)_\d+(?:_part(\d+))?\.mp4`)
 var mapRe = regexp.MustCompile(`#EXT-X-MAP:URI="([^"]+)"`)
 
@@ -568,10 +565,6 @@ func (p *Parser) writeSeg(b []byte) {
 
 func (p *Parser) get(url string) ([]byte, error) { return fetch(p.hc, url) }
 
-func (p *Parser) getPlaylist(rawURL string) ([]byte, error) {
-	return p.getPlaylistWithContext(context.Background(), rawURL)
-}
-
 func (p *Parser) getPlaylistWithContext(ctx context.Context, rawURL string) ([]byte, error) {
 	return fetchWithCacheMode(ctx, p.hc, rawURL, false)
 }
@@ -590,34 +583,6 @@ type hlsPlaylistResult struct {
 	body      []byte
 	err       error
 	elapsedMs int
-}
-
-func (p *Parser) fetchPlaylistBatch(ctx context.Context, requests []hlsPlaylistRequest) []hlsPlaylistResult {
-	if len(requests) == 0 {
-		return nil
-	}
-	batchCtx, cancel := context.WithTimeout(ctx, playlistRequestTO)
-	defer cancel()
-
-	if len(requests) == 1 {
-		body, err := p.getPlaylistWithContext(batchCtx, requests[0].url)
-		return []hlsPlaylistResult{{request: requests[0], body: body, err: err}}
-	}
-
-	ch := make(chan hlsPlaylistResult, len(requests))
-	for _, req := range requests {
-		req := req
-		go func() {
-			body, err := p.getPlaylistWithContext(batchCtx, req.url)
-			ch <- hlsPlaylistResult{request: req, body: body, err: err}
-		}()
-	}
-
-	results := make([]hlsPlaylistResult, 0, len(requests))
-	for range requests {
-		results = append(results, <-ch)
-	}
-	return results
 }
 
 type httpStatusError struct {
@@ -784,14 +749,6 @@ func hlsMonitorSummary(st hlsSegmentStats, periodMSNGrowth, periodWritten, write
 // fetch 带站点 UA/Referer 拉取 url，非 200 视为错误。包级以便引导逻辑(bootstrap.go)复用。
 func fetch(hc *http.Client, url string) ([]byte, error) {
 	return fetchWithCacheMode(context.Background(), hc, url, false)
-}
-
-func fetchWithNoCache(hc *http.Client, url string) ([]byte, error) {
-	return fetchWithCacheMode(context.Background(), hc, url, true)
-}
-
-func fetchWithNoCacheContext(ctx context.Context, hc *http.Client, url string) ([]byte, error) {
-	return fetchWithCacheMode(ctx, hc, url, true)
 }
 
 func fetchWithCacheMode(ctx context.Context, hc *http.Client, url string, noCache bool) ([]byte, error) {

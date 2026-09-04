@@ -127,6 +127,30 @@ Bililive-go是一个支持多种直播平台的直播录制工具
         <td>✅ 支持</td>
         <td>✅ 支持</td>
     </tr>
+    <tr align="center">
+        <td>快手直播</td>
+        <td>live.kuaishou.com</td>
+        <td>✅ 支持</td>
+        <td></td>
+    </tr>
+    <tr align="center">
+        <td>Twitch</td>
+        <td>www.twitch.tv</td>
+        <td>✅ 支持</td>
+        <td></td>
+    </tr>
+    <tr align="center">
+        <td>小红书直播</td>
+        <td>www.xiaohongshu.com</td>
+        <td>✅ 支持</td>
+        <td></td>
+    </tr>
+    <tr align="center">
+        <td>BoyFriend</td>
+        <td>zh.boyfriend.show</td>
+        <td>✅ 支持</td>
+        <td></td>
+    </tr>
 </table>
 
 ### cookie 在 config.yml 中的设置方法
@@ -206,7 +230,9 @@ docker run --restart=always -v ~/config.yml:/etc/bililive-go/config.yml -v ~/Vid
 ```
 docker compose up
 ```
-此时默认使用 `config.docker.yml` 文件作为程序的配置文件，`Videos/` 目录作为录制视频的输出目录。
+此时默认使用 `config.docker.yml` 文件作为程序的配置文件，`Videos/` 目录作为录制视频的输出目录。默认端口映射仅允许宿主机本机访问 WebUI。
+
+若需要从局域网或公网访问，请先在 `config.docker.yml` 中开启 `rpc.auth` 并设置强密码，再将 `docker-compose.yml` 中的端口映射改为 `8080:8080`；不要在未开启鉴权时对外暴露 WebUI。
 
 NAS 用户使用系统自带 GUI 创建 docker compose 的情况请参考群晖用 docker compose 安装 bgo 的 [图文说明](./docs/Synology-related.md#如何用-docker-compose-安装-bgo)
 
@@ -221,7 +247,7 @@ NAS 用户使用系统自带 GUI 创建 docker compose 的情况请参考群晖�
 
 | 工具 | 版本要求 | 说明 |
 |------|----------|------|
-| [Go](https://golang.org/dl/) | 1.25+ | 后端开发语言 |
+| [Go](https://golang.org/dl/) | 1.26+ | 后端开发语言 |
 | [GNU Make](https://www.gnu.org/software/make/) | 4.0+ | 构建工具（见下方安装说明） |
 | [Node.js](https://nodejs.org/) | 18+ | 前端构建 |
 | [Git](https://git-scm.com/) | - | 版本控制 |

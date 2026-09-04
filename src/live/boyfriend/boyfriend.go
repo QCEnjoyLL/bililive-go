@@ -135,7 +135,7 @@ func (l *Live) GetStreamInfos() ([]*live.StreamUrlInfo, error) {
 	if err != nil {
 		return nil, err
 	}
-	if !(item.Get("isLive").Bool() && item.Get("status").String() == "public") {
+	if !item.Get("isLive").Bool() || item.Get("status").String() != "public" {
 		return nil, fmt.Errorf("%w: 房间未开播或不可观看 (status=%s)", live.ErrLiveOffline, item.Get("status").String())
 	}
 

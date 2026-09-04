@@ -72,7 +72,7 @@ RUN set -eux; \
             *) echo "Unsupported arch: $(arch)"; exit 1 ;; \
         esac; \
         cd /tmp && \
-        curl -sSLO "https://github.com/bililive-go/bililive-go/releases/download/${tag}/bililive-linux-${go_arch}.tar.gz" && \
+        curl -sSLO "https://github.com/QCEnjoyLL/bililive-go/releases/download/${tag}/bililive-linux-${go_arch}.tar.gz" && \
         tar zxvf "bililive-linux-${go_arch}.tar.gz" "bililive-linux-${go_arch}" && \
         chmod +x "bililive-linux-${go_arch}" && \
         mv "./bililive-linux-${go_arch}" /usr/bin/bililive-go && \

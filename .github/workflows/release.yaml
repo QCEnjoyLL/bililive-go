@@ -136,7 +136,7 @@ jobs:
           cat "$NOTES_FILE"
       - name: Publish GitHub Release with all packaged files
         if: ${{ env.IS_DRY_RUN != 'true' }}
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           body_path: ${{ env.RELEASE_NOTES_FILE }}
           files: |

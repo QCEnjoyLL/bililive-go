@@ -13,19 +13,17 @@ import (
 )
 
 func newExternalThemeReverseProxy(target *url.URL) *httputil.ReverseProxy {
-	proxy := httputil.NewSingleHostReverseProxy(target)
-	originalDirector := proxy.Director
-	proxy.Director = func(r *http.Request) {
-		originalDirector(r)
-		// Keep HTML responses uncompressed so the proxy can inject the theme bridge.
-		r.Header.Del("Accept-Encoding")
+	proxy := &httputil.ReverseProxy{
+		Rewrite: func(r *httputil.ProxyRequest) {
+			r.SetURL(target)
+			r.Out.Host = r.In.Host
+			r.SetXForwarded()
+			// Keep HTML responses uncompressed so the proxy can inject the theme bridge.
+			r.Out.Header.Del("Accept-Encoding")
+		},
 	}
 	proxy.ModifyResponse = injectExternalThemeResponse
 	return proxy
-}
-
-func newToolsExternalThemeReverseProxy(target *url.URL) http.Handler {
-	return guardProtectedToolUninstall(target, newExternalThemeReverseProxy(target))
 }
 
 type remoteToolGroupStatus struct {

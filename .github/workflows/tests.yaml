@@ -44,7 +44,7 @@ jobs:
       - name: Test
         run: make build-web test
       - name: Codecov
-        uses: codecov/codecov-action@v2
+        uses: codecov/codecov-action@v5
   lint:
     name: Lint
     needs: go-cache

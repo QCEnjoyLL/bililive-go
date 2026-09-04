@@ -139,6 +139,30 @@ func TestInjectExternalThemeResponseSkipsNonHTML(t *testing.T) {
 	assert.Equal(t, "console.log(1);", string(body))
 }
 
+func TestExternalThemeReverseProxyRewritesRequest(t *testing.T) {
+	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/base/assets/app.js", r.URL.Path)
+		assert.Equal(t, "target=1&request=2", r.URL.RawQuery)
+		assert.Equal(t, "frontend.local", r.Host)
+		assert.Equal(t, "frontend.local", r.Header.Get("X-Forwarded-Host"))
+		assert.Equal(t, "http", r.Header.Get("X-Forwarded-Proto"))
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = io.WriteString(w, "<html><head></head><body>ok</body></html>")
+	}))
+	defer remote.Close()
+
+	target, err := url.Parse(remote.URL + "/base?target=1")
+	require.NoError(t, err)
+	req := httptest.NewRequest(http.MethodGet, "http://frontend.local/assets/app.js?request=2", nil)
+	req.Header.Set("Accept-Encoding", "gzip")
+	rr := httptest.NewRecorder()
+
+	newExternalThemeReverseProxy(target).ServeHTTP(rr, req)
+
+	assert.Equal(t, http.StatusOK, rr.Code)
+	assert.Contains(t, rr.Body.String(), "bgo-external-theme-bridge")
+}
+
 func TestRequiredToolUninstallGuardBlocksLastInstalledVersion(t *testing.T) {
 	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		require.Equal(t, "/api/tools", r.URL.Path)

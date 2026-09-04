@@ -11,7 +11,7 @@ services:
       - ./Videos:/srv/bililive
       - ./config.docker.yml:/etc/bililive-go/config.yml
     ports:
-      - 8080:8080
+      - 127.0.0.1:8080:8080
 
 #  prometheus:
 #    image: quay.io/prometheus/prometheus
