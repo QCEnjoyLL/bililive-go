@@ -1053,6 +1053,35 @@ func newConfigPostProcess(c *Config) {
 	if c.Proxy.DownloadProxy == nil {
 		c.Proxy.DownloadProxy = &ProxyEntry{}
 	}
+	// 规范化手动编辑配置写入的别名域名房间（如 m.douyu.com → www.douyu.com），
+	// 保证 cookies / 平台配置按统一 host 命中；抖音首页 query 形态也在此转成标准长链。
+	// 必须在下面的去重之前执行，否则两种写法不会收敛成同一 key。
+	for i := range c.LiveRooms {
+		c.LiveRooms[i].Url = NormalizeLiveRoomUrl(c.LiveRooms[i].Url)
+	}
+	// 规范化后同一房间的不同写法（m.douyu.com/1 与 www.douyu.com/1；live_web_rid query 形态与长链）
+	// 会变成完全相同的 URL。老版本存量条目 + 升级后经 UI 正常添加的条目就会各占一行，
+	// 加载不去重则同一房间建出两个 Live、开播双录。合并策略：保留第一条，
+	// is_listening 任一为真即为真，notify_only 全部为真才为真（宁可多录，不漏录）。
+	if len(c.LiveRooms) > 1 {
+		seen := make(map[string]int, len(c.LiveRooms))
+		deduped := c.LiveRooms[:0]
+		for _, room := range c.LiveRooms {
+			if idx, ok := seen[room.Url]; ok {
+				if room.IsListening {
+					deduped[idx].IsListening = true
+				}
+				if !room.NotifyOnly {
+					deduped[idx].NotifyOnly = false
+				}
+				fmt.Fprintf(os.Stderr, "[Config] 检测到规范化后重复的房间 %s，已合并到先线条目\n", room.Url)
+				continue
+			}
+			seen[room.Url] = len(deduped)
+			deduped = append(deduped, room)
+		}
+		c.LiveRooms = deduped
+	}
 }
 
 // configMinimal 是配置文件的最小子集，仅包含 launcher 决策所需的字段。
@@ -1397,6 +1426,51 @@ func (r *ResolvedConfig) applyOverrides(override *OverridableConfig) {
 		r.Danmaku = mergeDanmakuConfig(&r.Danmaku, override.Danmaku)
 	}
 }
+
+// roomUrlHostAliases 房间 URL 的 host 别名表：把移动端/备用入口域名统一为平台标准域名，
+// 使 cookies、平台层级配置、房间查找等所有按 host 索引的链路只需认一个 key。
+var roomUrlHostAliases = map[string]string{
+	"m.douyu.com": "www.douyu.com",
+}
+
+// NormalizeLiveRoomUrl 将房间 URL 中命中的别名 host 替换为标准 host（如 m.douyu.com → www.douyu.com）。
+// 解析失败或 host 不在别名表时原样返回。
+func NormalizeLiveRoomUrl(urlStr string) string {
+	u, err := url.Parse(urlStr)
+	if err != nil {
+		return urlStr
+	}
+	if std, ok := roomUrlHostAliases[u.Host]; ok {
+		u.Host = std
+		return u.String()
+	}
+	// 抖音直播首页分享出的 query 形态链接（如 live.douyin.com/?live_web_rid=xxx）path 为空，
+	// btools 从 path 取房间号会拿不到 → 房间信息请求必然失败，规范化为长链 https://live.douyin.com/<web_rid>。
+	// 只信任 live_web_rid（账号级稳定 web_rid），不用 room_id（可能是固化场次的真实 roomId）。
+	if u.Host == "live.douyin.com" && strings.Trim(u.Path, "/") == "" {
+		if rid := u.Query().Get("live_web_rid"); isAllDigits(rid) {
+			return "https://live.douyin.com/" + rid
+		}
+	}
+	return urlStr
+}
+
+// isAllDigits 判断 s 是否非空且全部为 ASCII 数字。
+func isAllDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// PlatformKeyDouyin 抖音的平台键。抖音的直播间解析依赖本地 bililive-tools 服务，
+// 需要在若干处按平台键做就绪判断，因此单独导出常量避免散落的字符串字面量。
+const PlatformKeyDouyin = "douyin"
 
 // GetPlatformKeyFromUrl 从URL中提取平台键，用于配置查找
 func GetPlatformKeyFromUrl(urlStr string) string {
