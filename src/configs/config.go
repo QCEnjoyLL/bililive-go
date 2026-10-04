@@ -1292,6 +1292,7 @@ func (c *Config) ResolveConfigForRoom(room *LiveRoom, platformName string) Resol
 		VideoSplitStrategies: c.VideoSplitStrategies,
 		OnRecordFinished:     c.OnRecordFinished,
 		TimeoutInUs:          c.TimeoutInUs,
+		StreamPreference:     c.StreamPreference,
 		DanmakuEnable:        c.DanmakuEnable,
 		Danmaku:              c.Danmaku,
 	}

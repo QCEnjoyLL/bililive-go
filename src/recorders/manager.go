@@ -2,6 +2,7 @@ package recorders
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -52,6 +53,7 @@ func SetBroadcastDanmakuFunc(fn BroadcastDanmakuFunc) {
 func NewManager(ctx context.Context) Manager {
 	rm := &manager{
 		savers:       make(map[types.LiveID]Recorder),
+		sessions:     make(map[types.LiveID]*recordingSession),
 		statusStopCh: make(chan struct{}),
 	}
 	instance.GetInstance(ctx).RecorderManager = rm
@@ -83,6 +85,7 @@ var (
 type manager struct {
 	lock         sync.RWMutex
 	savers       map[types.LiveID]Recorder
+	sessions     map[types.LiveID]*recordingSession
 	statusTicker *time.Ticker
 	statusStopCh chan struct{}
 	statusWg     sync.WaitGroup // 用于等待广播 goroutine 退出
@@ -93,6 +96,13 @@ type manager struct {
 	// 会误判为"无活跃录制"导致优雅更新被提前触发。
 	// 通过 restartingCount 将收尾中的旧 recorder 也计入活跃数量。
 	restartingCount atomic.Int32
+}
+
+// recordingSession 跨分段保留整场录制的开始时间，停止后取消所属定时器。
+type recordingSession struct {
+	startedAt time.Time
+	ctx       context.Context
+	cancel    context.CancelFunc
 }
 
 func (m *manager) registryListener(ctx context.Context, ed events.Dispatcher) {
@@ -163,6 +173,8 @@ func (m *manager) Close(ctx context.Context) {
 	defer m.lock.Unlock()
 	for id, recorder := range m.savers {
 		recorder.Close()
+		m.sessions[id].cancel()
+		delete(m.sessions, id)
 		delete(m.savers, id)
 	}
 	inst := instance.GetInstance(ctx)
@@ -172,11 +184,11 @@ func (m *manager) Close(ctx context.Context) {
 func (m *manager) AddRecorder(ctx context.Context, live live.Live) error {
 	m.lock.Lock()
 	defer m.lock.Unlock()
-	return m.addRecorderLocked(ctx, live)
+	return m.addRecorderLocked(ctx, live, nil)
 }
 
 // addRecorderLocked 是 AddRecorder 的内部实现，调用者必须已持有 m.lock
-func (m *manager) addRecorderLocked(ctx context.Context, live live.Live) error {
+func (m *manager) addRecorderLocked(ctx context.Context, live live.Live, session *recordingSession) error {
 	if _, ok := m.savers[live.GetLiveId()]; ok {
 		return ErrRecorderExist
 	}
@@ -186,15 +198,6 @@ func (m *manager) addRecorderLocked(ctx context.Context, live live.Live) error {
 	}
 	m.savers[live.GetLiveId()] = recorder
 
-	cfg := configs.GetCurrentConfig()
-	if cfg != nil {
-		if maxDur := cfg.VideoSplitStrategies.MaxDuration; maxDur != 0 {
-			bilisentry.GoWithContext(ctx, func(ctx context.Context) { m.cronRestart(ctx, live) })
-		}
-		if maxRec := cfg.VideoSplitStrategies.MaxRecordDuration; maxRec != 0 {
-			bilisentry.GoWithContext(ctx, func(ctx context.Context) { m.cronStop(ctx, live) })
-		}
-	}
 	if err := recorder.Start(ctx); err != nil {
 		// Start 失败时从 map 删除并异步 Close 新 recorder，防止泄漏/僵尸实例
 		// 使用异步 Close 避免在持锁时执行耗时操作（如等待 ffmpeg 进程退出），
@@ -203,65 +206,99 @@ func (m *manager) addRecorderLocked(ctx context.Context, live live.Live) error {
 		bilisentry.Go(recorder.Close)
 		return err
 	}
+	newSession := session == nil
+	if newSession {
+		sessionCtx, cancel := context.WithCancel(ctx)
+		session = &recordingSession{startedAt: time.Now(), ctx: sessionCtx, cancel: cancel}
+	}
+	m.sessions[live.GetLiveId()] = session
+	if cfg := configs.GetCurrentConfig(); newSession && cfg != nil {
+		strategies := cfg.GetEffectiveConfigForRoom(live.GetRawUrl()).VideoSplitStrategies
+		// 分段收尾可能耗时，整场截止由独立定时器检查。
+		if strategies.MaxDuration > 0 {
+			bilisentry.Go(func() { m.watchSession(ctx, live, session, true) })
+		}
+		if strategies.MaxRecordDuration > 0 {
+			bilisentry.Go(func() { m.watchSession(ctx, live, session, false) })
+		}
+	}
 	return nil
 }
 
-func (m *manager) cronRestart(ctx context.Context, live live.Live) {
-	recorder, err := m.GetRecorder(ctx, live.GetLiveId())
-	if err != nil {
-		return
-	}
-	cfg := configs.GetCurrentConfig()
-	if cfg == nil {
-		return
-	}
-	if time.Since(recorder.StartTime()) < cfg.VideoSplitStrategies.MaxDuration {
-		time.AfterFunc(time.Minute/4, func() {
-			m.cronRestart(ctx, live)
-		})
-		return
-	}
-	if err := m.RestartRecorder(ctx, live); err != nil {
-		return
-	}
-}
-
-// cronStop 定时录制：达到 VideoSplitStrategies.MaxRecordDuration（墙钟，从开始录制起算）后，
-// 停止该房间监听 → 触发 ListenStop → RemoveRecorder，且不再自动重录，直到用户手动重启。
-func (m *manager) cronStop(ctx context.Context, live live.Live) {
-	recorder, err := m.GetRecorder(ctx, live.GetLiveId())
-	if err != nil {
-		return // recorder 已不存在（已下播/已停），停止定时
-	}
-	cfg := configs.GetCurrentConfig()
-	if cfg == nil || cfg.VideoSplitStrategies.MaxRecordDuration <= 0 {
-		return
-	}
-	maxRec := cfg.VideoSplitStrategies.MaxRecordDuration
-	if time.Since(recorder.StartTime()) < maxRec {
-		time.AfterFunc(time.Minute/4, func() { m.cronStop(ctx, live) })
-		return
-	}
-	live.GetLogger().Infof("定时录制达到 %s，停止录制并停止监听该房间（不再自动重录）", maxRec)
-	if lm, ok := instance.GetInstance(ctx).ListenerManager.(listeners.Manager); ok {
-		if err := lm.RemoveListener(ctx, live.GetLiveId()); err != nil {
-			live.GetLogger().Warnf("定时停止：移除监听失败: %v", err)
+func (m *manager) watchSession(ctx context.Context, live live.Live, session *recordingSession, checkSplit bool) {
+	ticker := time.NewTicker(15 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-session.ctx.Done():
+			return
+		case now := <-ticker.C:
+			if !m.checkSession(ctx, live, session, now, checkSplit) {
+				return
+			}
 		}
 	}
 }
 
+// checkSession 同时检查整场录制截止时间和当前分段时长，整场截止优先。
+func (m *manager) checkSession(ctx context.Context, live live.Live, session *recordingSession, now time.Time, checkSplit bool) bool {
+	liveID := live.GetLiveId()
+	m.lock.RLock()
+	currentSession := m.sessions[liveID]
+	recorder := m.savers[liveID]
+	m.lock.RUnlock()
+	if currentSession != session || recorder == nil || session.ctx.Err() != nil {
+		return false
+	}
+	cfg := configs.GetCurrentConfig()
+	if cfg == nil {
+		return false
+	}
+	strategies := cfg.GetEffectiveConfigForRoom(live.GetRawUrl()).VideoSplitStrategies
+	if maxRec := strategies.MaxRecordDuration; maxRec > 0 && now.Sub(session.startedAt) >= maxRec {
+		// 再次验证会话并持锁完成停止，避免旧定时器关闭后来新开的监听。
+		m.lock.Lock()
+		defer m.lock.Unlock()
+		if m.sessions[liveID] != session || session.ctx.Err() != nil {
+			return false
+		}
+		live.GetLogger().Infof("定时录制达到 %s，停止录制并停止监听该房间（不再自动重录）", maxRec)
+		if _, err := configs.SetLiveRoomListening(live.GetRawUrl(), false); err != nil {
+			live.GetLogger().Warnf("定时停止：保存监听状态失败: %v", err)
+		}
+		if lm, ok := instance.GetInstance(ctx).ListenerManager.(listeners.Manager); ok {
+			if err := lm.RemoveListener(ctx, liveID); err != nil && !errors.Is(err, listeners.ErrListenerNotExist) {
+				live.GetLogger().Warnf("定时停止：移除监听失败: %v", err)
+			}
+		}
+		// 未监控的手动录制也必须停止，不依赖异步 ListenStop 事件。
+		_ = m.removeRecorderLocked(ctx, liveID)
+		return false
+	}
+	if maxDur := strategies.MaxDuration; checkSplit && maxDur > 0 && now.Sub(recorder.StartTime()) >= maxDur {
+		if err := m.restartRecorder(ctx, live, session); err != nil {
+			live.GetLogger().Warnf("定时分段失败: %v", err)
+		}
+	}
+	return true
+}
+
 func (m *manager) RestartRecorder(ctx context.Context, live live.Live) error {
+	return m.restartRecorder(ctx, live, nil)
+}
+
+func (m *manager) restartRecorder(ctx context.Context, live live.Live, expectedSession *recordingSession) error {
 	// 1. 在锁内完成 map 操作：取出旧 recorder，创建并放入新 recorder
 	// 这样外部观察者（如 LiveEnd 事件处理器）始终能看到录制器存在，不会出现中间状态
 	m.lock.Lock()
 	oldRecorder, ok := m.savers[live.GetLiveId()]
-	if !ok {
+	if !ok || (expectedSession != nil && m.sessions[live.GetLiveId()] != expectedSession) {
 		m.lock.Unlock()
 		return ErrRecorderNotExist
 	}
 	// 从 map 中移除旧 recorder 并立即添加新 recorder，保持锁贯穿整个替换操作
 	delete(m.savers, live.GetLiveId())
-	if err := m.addRecorderLocked(ctx, live); err != nil {
+	if err := m.addRecorderLocked(ctx, live, m.sessions[live.GetLiveId()]); err != nil {
 		// 添加新 recorder 失败，恢复旧 recorder 避免僵尸状态
 		m.savers[live.GetLiveId()] = oldRecorder
 		m.lock.Unlock()
@@ -318,6 +355,8 @@ func (m *manager) removeRecorderLocked(ctx context.Context, liveId types.LiveID)
 	}
 	recorder.Close()
 	delete(m.savers, liveId)
+	m.sessions[liveId].cancel()
+	delete(m.sessions, liveId)
 
 	// 录制结束后，检查是否有等待中的优雅更新
 	if onRecordingEndFunc != nil {

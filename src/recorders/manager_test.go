@@ -41,6 +41,7 @@ func TestManagerAddAndRemoveRecorder(t *testing.T) {
 	defer func() { newRecorder = backup }()
 	l := livemock.NewMockLive(ctrl)
 	l.EXPECT().GetLiveId().Return(types.LiveID("test")).AnyTimes()
+	l.EXPECT().GetRawUrl().Return("https://live.bilibili.com/12345").AnyTimes()
 	l.EXPECT().GetLogger().Return(livelogger.New(0, nil)).AnyTimes()
 	assert.NoError(t, m.AddRecorder(context.Background(), l))
 	assert.Equal(t, ErrRecorderExist, m.AddRecorder(context.Background(), l))
@@ -104,6 +105,7 @@ func TestRestartRecorderRaceWithLiveEnd(t *testing.T) {
 
 	l := livemock.NewMockLive(ctrl)
 	l.EXPECT().GetLiveId().Return(types.LiveID("test")).AnyTimes()
+	l.EXPECT().GetRawUrl().Return("https://live.bilibili.com/12345").AnyTimes()
 	l.EXPECT().GetLogger().Return(livelogger.New(0, nil)).AnyTimes()
 
 	// 先正常添加一个录制器

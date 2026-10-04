@@ -24,7 +24,8 @@ func TestSchedulerInternalAPIBypassesWebAuthForLoopbackToken(t *testing.T) {
 		seenPath = r.URL.Path
 		w.WriteHeader(http.StatusNoContent)
 	})
-	handler := schedulerInternalAPIMiddleware(webAuthMiddleware(auth)(next))
+	setWebAuthTestConfig(t, auth)
+	handler := schedulerInternalAPIMiddleware(webAuthMiddleware()(next))
 
 	req := httptest.NewRequest(http.MethodGet, internalapi.SchedulerPathPrefix()+"/api/info", nil)
 	req.RemoteAddr = "127.0.0.1:12345"
@@ -45,8 +46,9 @@ func TestSchedulerInternalAPIProxyReachesAPIRoute(t *testing.T) {
 	}
 
 	router := mux.NewRouter()
+	setWebAuthTestConfig(t, auth)
 	router.Use(schedulerInternalAPIMiddleware)
-	router.Use(webAuthMiddleware(auth))
+	router.Use(webAuthMiddleware())
 	apiRoute := router.PathPrefix(apiRouterPrefix).Subrouter()
 	apiRoute.HandleFunc("/info", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
@@ -72,7 +74,8 @@ func TestSchedulerInternalAPIDoesNotBypassWebAuthForInvalidToken(t *testing.T) {
 	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
-	handler := schedulerInternalAPIMiddleware(webAuthMiddleware(auth)(next))
+	setWebAuthTestConfig(t, auth)
+	handler := schedulerInternalAPIMiddleware(webAuthMiddleware()(next))
 
 	req := httptest.NewRequest(http.MethodGet, "/internal/scheduler-api/bad-token/api/info", nil)
 	req.RemoteAddr = "127.0.0.1:12345"
@@ -93,7 +96,8 @@ func TestSchedulerInternalAPIDoesNotBypassWebAuthForRemoteAddress(t *testing.T) 
 	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
-	handler := schedulerInternalAPIMiddleware(webAuthMiddleware(auth)(next))
+	setWebAuthTestConfig(t, auth)
+	handler := schedulerInternalAPIMiddleware(webAuthMiddleware()(next))
 
 	req := httptest.NewRequest(http.MethodGet, internalapi.SchedulerPathPrefix()+"/api/info", nil)
 	req.RemoteAddr = "192.0.2.10:12345"

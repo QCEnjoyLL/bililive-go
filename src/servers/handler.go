@@ -784,6 +784,12 @@ func removeLiveImpl(ctx context.Context, live live.Live) error {
 			return err
 		}
 	}
+	// 手动录制不一定有监听器，删除房间时必须同时停止录制。
+	if rm, ok := inst.RecorderManager.(recorders.Manager); ok {
+		if err := rm.RemoveRecorder(ctx, liveId); err != nil && !errors.Is(err, recorders.ErrRecorderNotExist) {
+			return err
+		}
+	}
 	inst.Lives.Delete(liveId)
 	if _, err := configs.RemoveLiveRoomByUrl(live.GetRawUrl()); err != nil {
 		return err

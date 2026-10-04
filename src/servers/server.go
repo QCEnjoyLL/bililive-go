@@ -67,7 +67,7 @@ func initMux(ctx context.Context) *mux.Router {
 		})
 	} /* , log */)
 	m.Use(schedulerInternalAPIMiddleware)
-	m.Use(webAuthMiddleware(configs.GetCurrentConfig().RPC.Auth))
+	m.Use(webAuthMiddleware())
 
 	// api router
 	apiRoute := m.PathPrefix(apiRouterPrefix).Subrouter()

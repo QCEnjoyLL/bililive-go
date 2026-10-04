@@ -281,13 +281,14 @@ var (
 )
 
 type recorder struct {
-	Live       live.Live
-	ed         events.Dispatcher
-	cache      gcache.Cache
-	startTime  time.Time
-	parser     parser.Parser
-	parserLock *sync.RWMutex
-	danmakuRec danmakuRecorder
+	Live        live.Live
+	ed          events.Dispatcher
+	cache       gcache.Cache
+	startTime   time.Time
+	startTimeMu sync.RWMutex
+	parser      parser.Parser
+	parserLock  *sync.RWMutex
+	danmakuRec  danmakuRecorder
 
 	stop  chan struct{}
 	state uint32
@@ -574,7 +575,10 @@ func (r *recorder) tryRecord(ctx context.Context) {
 		return
 	}
 	r.setAndCloseParser(p)
-	r.startTime = time.Now()
+	attemptStartedAt := time.Now()
+	r.startTimeMu.Lock()
+	r.startTime = attemptStartedAt
+	r.startTimeMu.Unlock()
 
 	// 弹幕录制（支持哔哩哔哩、抖音、斗鱼平台）
 	if resolvedConfig.DanmakuEnable {
@@ -628,7 +632,7 @@ func (r *recorder) tryRecord(ctx context.Context) {
 	if err != nil {
 		r.getLogger().WithError(err).Error("failed to parse live stream")
 		// 视频流快速失败时（如 404），清理没有对应视频文件的残留弹幕
-		if elapsed := time.Since(r.startTime); elapsed < 5*time.Second {
+		if elapsed := time.Since(attemptStartedAt); elapsed < 5*time.Second {
 			cleanupOrphanedDanmakuFiles(dmFile)
 		}
 		return
@@ -1055,6 +1059,8 @@ func (r *recorder) Start(ctx context.Context) error {
 }
 
 func (r *recorder) StartTime() time.Time {
+	r.startTimeMu.RLock()
+	defer r.startTimeMu.RUnlock()
 	return r.startTime
 }
 

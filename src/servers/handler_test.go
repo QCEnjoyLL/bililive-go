@@ -47,7 +47,8 @@ func TestWebAuthMiddleware(t *testing.T) {
 	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
-	handler := webAuthMiddleware(auth)(next)
+	setWebAuthTestConfig(t, auth)
+	handler := webAuthMiddleware()(next)
 
 	page := httptest.NewRecorder()
 	pageReq := httptest.NewRequest(http.MethodGet, "/", nil)

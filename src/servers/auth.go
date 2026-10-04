@@ -86,12 +86,22 @@ func (s *webAuthSessionStore) cleanupLocked(now time.Time) {
 	}
 }
 
-func webAuthMiddleware(auth configs.RPCAuth) mux.MiddlewareFunc {
-	if !auth.Enable {
-		return func(next http.Handler) http.Handler { return next }
-	}
+func webAuthMiddleware() mux.MiddlewareFunc {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// 每次请求读取最新快照，使在线修改鉴权开关和密码立即生效。
+			cfg := configs.GetCurrentConfig()
+			if cfg == nil {
+				writeAuthJSON(w, http.StatusServiceUnavailable, commonResp{
+					ErrNo: http.StatusServiceUnavailable, ErrMsg: "配置尚未就绪",
+				})
+				return
+			}
+			auth := cfg.RPC.Auth
+			if !auth.Enable {
+				next.ServeHTTP(w, r)
+				return
+			}
 			if isSchedulerInternalAPIRequest(r) {
 				next.ServeHTTP(w, r)
 				return

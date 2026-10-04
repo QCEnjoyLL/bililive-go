@@ -24,6 +24,7 @@ type Manager struct {
 	config        *ManagerConfig
 	runningTasks  map[int64]context.CancelFunc
 	mu            sync.RWMutex
+	scheduleMu    sync.Mutex // 防止多个调度入口使用过期的待执行任务快照
 	wg            sync.WaitGroup
 	eventDispatch events.Dispatcher
 	ticker        *time.Ticker
@@ -93,7 +94,9 @@ func (m *Manager) Start(ctx context.Context) error {
 
 // Close 停止管理器（实现 Module 接口）
 func (m *Manager) Close(ctx context.Context) {
+	m.mu.Lock()
 	m.cancel()
+	m.mu.Unlock()
 	if m.ticker != nil {
 		m.ticker.Stop()
 	}
@@ -122,6 +125,11 @@ func (m *Manager) pollLoop() {
 
 // scheduleNextTasks 调度下一批任务
 func (m *Manager) scheduleNextTasks() {
+	m.scheduleMu.Lock()
+	defer m.scheduleMu.Unlock()
+	if m.ctx.Err() != nil {
+		return
+	}
 	m.mu.RLock()
 	runningCount := len(m.runningTasks)
 	maxConcurrent := m.config.MaxConcurrent
@@ -148,6 +156,11 @@ func (m *Manager) scheduleNextTasks() {
 // startTask 启动任务执行
 func (m *Manager) startTask(task *PipelineTask) {
 	m.mu.Lock()
+	// 检查和占用槽位必须在同一把锁内，关闭后也不能再启动任务。
+	if m.ctx.Err() != nil || len(m.runningTasks) >= m.config.MaxConcurrent {
+		m.mu.Unlock()
+		return
+	}
 	// 检查是否已经在运行
 	if _, exists := m.runningTasks[task.ID]; exists {
 		m.mu.Unlock()
@@ -157,21 +170,28 @@ func (m *Manager) startTask(task *PipelineTask) {
 	// 创建任务上下文
 	taskCtx, cancel := context.WithCancel(m.ctx)
 	m.runningTasks[task.ID] = cancel
+	m.wg.Add(1)
 	m.mu.Unlock()
 
 	// 更新任务状态为运行中
 	task.MarkStarted()
 	if err := m.store.UpdateTask(m.ctx, task); err != nil {
 		logrus.WithError(err).Error("failed to update pipeline task status")
+		cancel()
+		m.mu.Lock()
+		delete(m.runningTasks, task.ID)
+		m.mu.Unlock()
+		m.wg.Done()
+		return
 	}
 
 	// 广播任务状态变化
 	m.broadcastTaskUpdate(task)
 
 	// 异步执行任务
-	m.wg.Add(1)
 	bilisentry.Go(func() {
 		defer m.wg.Done()
+		defer cancel()
 		m.executeTask(taskCtx, task)
 	})
 }
