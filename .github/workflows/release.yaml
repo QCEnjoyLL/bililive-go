@@ -111,6 +111,17 @@ jobs:
           else
             echo "GIT_TAG=`echo $(git describe --tags --abbrev=0)`" >> $GITHUB_ENV
           fi
+      - name: Determine release channel
+        # 发布通道由 tag 后缀决定：
+        #   v1.2.10            → master 通道（自研版本，可占用 latest）
+        #   v1.2.10-upstream   → upstream 通道（合并原版后的版本，永不占用 latest）
+        run: |
+          if echo "$GIT_TAG" | grep -q -- '-upstream'; then
+            echo "CHANNEL=upstream" >> $GITHUB_ENV
+          else
+            echo "CHANNEL=master" >> $GITHUB_ENV
+          fi
+          echo "发布通道: ${CHANNEL:-master}（tag=$GIT_TAG）"
       - name: Download all shard artifacts
         uses: actions/download-artifact@v4
         with:
@@ -126,9 +137,30 @@ jobs:
       - name: Prepare Chinese release notes
         run: |
           NOTES_FILE="docs/releases/${GIT_TAG}.md"
+          if [ ! -f "$NOTES_FILE" ] && [ "${CHANNEL:-master}" = "upstream" ]; then
+            # 上游合并版允许没有单独的中文说明，自动生成一份带分支信息的说明
+            NOTES_FILE="docs/releases/upstream-${GIT_TAG}.md"
+            {
+              echo "# ${GIT_TAG}（上游合并版）"
+              echo
+              echo "本版本是「自研改动 + 上游合并」通道的构建，功能集合与 master 通道的稳定版**不同**，两者可并存安装，互不覆盖。"
+              echo
+              echo "- 二进制包名与 master 通道相同，请放在**不同目录**运行（各自的 config.yml 独立）"
+              echo "- Docker 镜像使用 \`:upstream\` 标签，master 通道才是 \`:latest\`"
+              echo "- 该 Release 标记为 prerelease，应用内更新只会提示 master 通道的版本"
+              echo
+              echo "## 上游合并内容"
+              echo
+              echo "见仓库根目录 \`上游更新评估.md\` 与合并分支的提交记录："
+              echo
+              echo "\`\`\`bash"
+              echo "git log --oneline master..HEAD"
+              echo "\`\`\`"
+            } > "$NOTES_FILE"
+          fi
           if [ ! -f "$NOTES_FILE" ]; then
             echo "::error::缺少中文更新说明文件: ${NOTES_FILE}"
-            echo "::error::请先编写 ${NOTES_FILE}，再发布 ${GIT_TAG}"
+            echo "::error::请先编写 docs/releases/${GIT_TAG}.md，再发布 ${GIT_TAG}"
             exit 1
           fi
           echo "RELEASE_NOTES_FILE=${NOTES_FILE}" >> "$GITHUB_ENV"
@@ -138,13 +170,16 @@ jobs:
         if: ${{ env.IS_DRY_RUN != 'true' }}
         uses: softprops/action-gh-release@v2
         with:
+          name: ${{ env.CHANNEL == 'upstream' && format('{0}（上游合并版）', env.GIT_TAG) || env.GIT_TAG }}
           body_path: ${{ env.RELEASE_NOTES_FILE }}
           files: |
             config.example.yml
             dist/**/*.tar.gz
             dist/**/*.zip
             dist/**/*.7z
-          prerelease: ${{ contains(env.GIT_TAG, 'rc') }}
+          # upstream 通道一律预发布：GitHub 的 /releases/latest 不含 prerelease，
+          # 应用内更新因此只会提示 master 通道版本，不会把上游版覆盖成自研版。
+          prerelease: ${{ env.CHANNEL == 'upstream' || contains(env.GIT_TAG, 'rc') }}
       - name: "[Dry-Run] 跳过 GitHub Release 发布"
         if: ${{ env.IS_DRY_RUN == 'true' }}
         run: echo "::notice::Dry-run 模式：跳过 GitHub Release 发布（GIT_TAG=$GIT_TAG）"
@@ -279,8 +314,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: echo "GIT_TAG=`echo $(git describe --tags --abbrev=0)`" >> $GITHUB_ENV
+      - name: Determine release channel
+        run: |
+          if echo "$GIT_TAG" | grep -q -- '-upstream'; then
+            echo "CHANNEL=upstream" >> $GITHUB_ENV
+          else
+            echo "CHANNEL=master" >> $GITHUB_ENV
+          fi
+          echo "发布通道: ${CHANNEL:-master}（tag=$GIT_TAG）"
       - run: |
-          if ! echo $GIT_TAG | grep "rc" >/dev/null; then
+          if [ "${CHANNEL:-master}" = "upstream" ]; then
+            # 上游合并版固定用 :upstream 浮动标签，永不覆盖 master 通道的 :latest
+            DOCKER_TAGS="${{ secrets.DOCKER_USERNAME }}/bililive-go:$GIT_TAG,${{ secrets.DOCKER_USERNAME }}/bililive-go:upstream"
+          elif ! echo $GIT_TAG | grep "rc" >/dev/null; then
             DOCKER_TAGS="${{ secrets.DOCKER_USERNAME }}/bililive-go:$GIT_TAG,${{ secrets.DOCKER_USERNAME }}/bililive-go:latest"
           else
             DOCKER_TAGS="${{ secrets.DOCKER_USERNAME }}/bililive-go:$GIT_TAG"
