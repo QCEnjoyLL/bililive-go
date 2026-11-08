@@ -116,12 +116,14 @@ jobs:
         #   v1.2.10            → master 通道（自研版本，可占用 latest）
         #   v1.2.10-upstream   → upstream 通道（合并原版后的版本，永不占用 latest）
         run: |
-          if echo "$GIT_TAG" | grep -q -- '-upstream'; then
-            echo "CHANNEL=upstream" >> $GITHUB_ENV
+          # 兼容两种写法：v1.2.10-upstream 与 upstream-v1.2.10
+          if echo "$GIT_TAG" | grep -qE 'upstream'; then
+            CHANNEL=upstream
           else
-            echo "CHANNEL=master" >> $GITHUB_ENV
+            CHANNEL=master
           fi
-          echo "发布通道: ${CHANNEL:-master}（tag=$GIT_TAG）"
+          echo "CHANNEL=$CHANNEL" >> $GITHUB_ENV
+          echo "发布通道: $CHANNEL（tag=$GIT_TAG）"
       - name: Download all shard artifacts
         uses: actions/download-artifact@v4
         with:
@@ -316,12 +318,14 @@ jobs:
       - run: echo "GIT_TAG=`echo $(git describe --tags --abbrev=0)`" >> $GITHUB_ENV
       - name: Determine release channel
         run: |
-          if echo "$GIT_TAG" | grep -q -- '-upstream'; then
-            echo "CHANNEL=upstream" >> $GITHUB_ENV
+          # 兼容两种写法：v1.2.10-upstream 与 upstream-v1.2.10
+          if echo "$GIT_TAG" | grep -qE 'upstream'; then
+            CHANNEL=upstream
           else
-            echo "CHANNEL=master" >> $GITHUB_ENV
+            CHANNEL=master
           fi
-          echo "发布通道: ${CHANNEL:-master}（tag=$GIT_TAG）"
+          echo "CHANNEL=$CHANNEL" >> $GITHUB_ENV
+          echo "发布通道: $CHANNEL（tag=$GIT_TAG）"
       - run: |
           if [ "${CHANNEL:-master}" = "upstream" ]; then
             # 上游合并版固定用 :upstream 浮动标签，永不覆盖 master 通道的 :latest
