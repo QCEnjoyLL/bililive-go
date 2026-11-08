@@ -99,6 +99,7 @@ danmaku:
   record_douyin_gift: true
   record_guard: true
   record_super_chat: true
+  show_username: false
   guard_position: bottom-left
   sc_position: bottom-left
 live_rooms: []

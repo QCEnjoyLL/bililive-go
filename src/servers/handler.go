@@ -729,12 +729,9 @@ func addLiveImpl(ctx context.Context, urlStr string, isListen bool) (info *live.
 						}
 						return nil
 					}
-					var merr error
-					if persist {
-						_, merr = configs.UpdateWithRetry(migrate, 3, 10*time.Millisecond)
-					} else {
-						_, merr = configs.UpdateWithRetryTransient(migrate, 3, 10*time.Millisecond)
-					}
+					// 本分支的 addLiveImpl 没有上游的 persist 形参（房间一律落盘），
+					// 故此处统一走持久化的 UpdateWithRetry。
+					_, merr := configs.UpdateWithRetry(migrate, 3, 10*time.Millisecond)
 					if merr != nil {
 						applog.GetLogger().Warnf("抖音短链房间迁移为长链失败: %v", merr)
 					}
